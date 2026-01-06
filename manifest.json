@@ -1,0 +1,11 @@
+[
+  { "src": "demos/server.js", "dest": "/demos/site/server.js" },
+  { "src": "demos/index.html", "dest": "/demos/site/index.html" },
+  { "src": "demos/style.css", "dest": "/demos/site/style.css" },
+  { "src": "demos/app.js", "dest": "/demos/site/app.js" },
+  { "src": "demos/test-lodash.js", "dest": "/demos/lodash/test-lodash.js" },
+  { "src": "demos/list-opfs.js", "dest": "/demos/utils/list-opfs.js" },
+  { "src": "demos/wget-url.md", "dest": "/demos/utils/wget-url.md" },
+  { "src": "demos/launcher.json", "dest": "/system/launcher.json" },
+  { "src": "demos/README.md", "dest": "/demos/utils/README.md" }
+]

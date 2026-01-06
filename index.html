@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>MHNOS Prototype</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+    
+    
+    
+<body>
+    <!-- LAYER 1: The Global Canvas (Draw over everything) -->
+    <canvas id="global-overlay"></canvas>
+
+    <!-- LAYER 2: The Window Manager (Floating Windows still exist) -->
+    <div id="desktop"></div>
+    <div id="minimize-dock" aria-label="Minimized apps"></div>
+
+    <!-- LAYER 3: The Command HUD -->
+    <div id="shell-hud">
+        <div id="shell-output">
+            <div class="log-line system">MHNOS Kernel v0.6.1 Ready. Type 'help'.</div>
+        </div>
+        <div id="shell-input-area">
+            <span class="prompt">user@mhnos:~$</span>
+            <input type="text" id="cmd-input" autocomplete="off" spellcheck="false" autofocus>
+        </div>
+    </div>
+
+    <!-- BOOT SCRIPTS -->
+    <script type="module" src="./src/kernel/main.js"></script>
+</body>
+
+  
+
+  
+  
+</html>

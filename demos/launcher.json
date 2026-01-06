@@ -1,0 +1,47 @@
+{
+  "version": 2,
+  "items": [
+    {
+      "id": "browser",
+      "label": "Browser",
+      "type": "app",
+      "command": "browser",
+      "icon": "🌐"
+    },
+    {
+      "id": "files",
+      "label": "Files",
+      "type": "app",
+      "command": "files",
+      "icon": "📁"
+    },
+    {
+      "id": "link",
+      "label": "Tools Menu",
+      "type": "url",
+      "url": "https://tools.mhn.lol",
+      "icon": "🔗"
+    },
+    {
+      "id": "life",
+      "label": "Life Manager",
+      "type": "url",
+      "url": "https://lifeman.mhn.lol",
+      "icon": "🧭"
+    },
+    {
+      "id": "wget-md",
+      "label": "wget-url.md",
+      "type": "markdown",
+      "path": "/demos/utils/wget-url.md",
+      "icon": "📝"
+    },
+    {
+      "id": "readme-md",
+      "label": "README",
+      "type": "markdown",
+      "path": "/demos/utils/README.md",
+      "icon": "📘"
+    }
+  ]
+}
