@@ -20,7 +20,7 @@ export class Shell {
         this.npm = new PackageManager(this);
 
         this.commands = {
-            'help': () => this.print("Commands: ls, cd, mkdir, rm, pwd, npm, edit, md, run, browser, files, launcher, ps, kill, clear"),
+            'help': () => this.print("Commands: ls, cd, mkdir, rm, pwd, npm, edit, md, run, gitclone, browser, files, launcher, ps, kill, clear"),
             'clear': () => this.output.innerHTML = '',
             'cls': () => this.output.innerHTML = '',
             
@@ -149,6 +149,12 @@ export class Shell {
         this.print(`Note: Cross-Origin (CORS) blocked requests will fail.`, 'system');
     }
 },
+            'gitclone': async (args) => {
+                const url = args[0];
+                const dest = args[1];
+                if (!url) return this.print("Usage: gitclone <git-url> [dest]", 'error');
+                await this.downloadGitHubRepo(url, dest);
+            },
 
             // --- APPS ---
             'files': () => new FileExplorer(this.os).open(this.cwd),
@@ -271,6 +277,104 @@ export class Shell {
         if(res.success) ideInstance.open(path, res.data, options);
         else ideInstance.open(path, '', options);
     }
+
+    parseGitHubRepoUrl(rawUrl) {
+        const input = rawUrl.trim();
+        const sshMatch = input.match(/^git@github\.com:([^/]+)\/(.+?)(?:\.git)?$/);
+        if (sshMatch) {
+            return { owner: sshMatch[1], repo: sshMatch[2], ref: null };
+        }
+
+        try {
+            const parsed = new URL(input);
+            if (parsed.hostname !== 'github.com') return null;
+            const parts = parsed.pathname.split('/').filter(Boolean);
+            if (parts.length < 2) return null;
+            const owner = parts[0];
+            const repo = parts[1].replace(/\.git$/, '');
+            let ref = null;
+            if (parts[2] === 'tree' && parts[3]) ref = parts[3];
+            return { owner, repo, ref };
+        } catch (e) {
+            return null;
+        }
+    }
+
+    async downloadGitHubRepo(rawUrl, destArg) {
+        const info = this.parseGitHubRepoUrl(rawUrl);
+        if (!info) {
+            this.print("gitclone: Only GitHub URLs are supported.", 'error');
+            return;
+        }
+
+        const { owner, repo } = info;
+        let branch = info.ref;
+        const targetDir = this.resolvePath(destArg || repo);
+
+        this.print(`[gitclone] Fetching ${owner}/${repo}...`, 'system');
+
+        if (!branch) {
+            const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
+            if (!repoRes.ok) {
+                this.print(`[gitclone] Repo not found (HTTP ${repoRes.status}).`, 'error');
+                return;
+            }
+            const repoData = await repoRes.json();
+            branch = repoData.default_branch || 'main';
+        }
+
+        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
+        if (!treeRes.ok) {
+            this.print(`[gitclone] Unable to fetch repo tree (HTTP ${treeRes.status}).`, 'error');
+            return;
+        }
+        const treeData = await treeRes.json();
+        if (!Array.isArray(treeData.tree)) {
+            this.print(`[gitclone] Invalid tree data.`, 'error');
+            return;
+        }
+
+        if (treeData.truncated) {
+            this.print(`[gitclone] Warning: tree truncated by GitHub API.`, 'error');
+        }
+
+        await fs.createDir(targetDir);
+
+        const blobs = treeData.tree.filter(entry => entry.type === 'blob');
+        this.print(`[gitclone] Downloading ${blobs.length} file(s) from ${branch}...`, 'system');
+
+        let saved = 0;
+        let failed = 0;
+        const encodedBranch = branch.split('/').map(encodeURIComponent).join('/');
+
+        for (const entry of treeData.tree) {
+            if (entry.type === 'tree') {
+                await fs.createDir(`${targetDir}/${entry.path}`);
+                continue;
+            }
+            if (entry.type !== 'blob') continue;
+
+            const encodedPath = entry.path.split('/').map(encodeURIComponent).join('/');
+            const fileUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodedBranch}/${encodedPath}`;
+            try {
+                const fileRes = await fetch(fileUrl);
+                if (!fileRes.ok) {
+                    failed += 1;
+                    continue;
+                }
+                const buffer = await fileRes.arrayBuffer();
+                const writeRes = await fs.writeFile(`${targetDir}/${entry.path}`, buffer);
+                if (writeRes.success) saved += 1;
+                else failed += 1;
+            } catch (e) {
+                failed += 1;
+            }
+        }
+
+        const resultMsg = `[gitclone] Saved ${saved} file(s) to ${targetDir}` +
+            (failed ? `, ${failed} failed.` : '.');
+        this.print(resultMsg, failed ? 'error' : 'success');
+    }
     
     attachDragAndDrop() {
     const dropZone = document.body;
@@ -288,28 +392,90 @@ export class Shell {
     dropZone.addEventListener('dragleave', () => dropZone.style.boxShadow = 'none');
     dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
 
+    const writeDroppedFile = async (file, basePath) => {
+        const buffer = await file.arrayBuffer();
+        const savePath = `${basePath}/${file.name}`;
+        const res = await fs.writeFile(savePath, buffer);
+        if (res.success) {
+            this.print(`[Upload] Saved: ${savePath}`, 'success');
+        } else {
+            this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
+        }
+    };
+
+    const walkDirectoryHandle = async (dirHandle, basePath) => {
+        const dirPath = `${basePath}/${dirHandle.name}`;
+        await fs.createDir(dirPath);
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                await writeDroppedFile(file, dirPath);
+            } else if (entry.kind === 'directory') {
+                await walkDirectoryHandle(entry, dirPath);
+            }
+        }
+    };
+
+    const walkWebkitEntry = async (entry, basePath) => {
+        if (entry.isFile) {
+            await new Promise((resolve) => {
+                entry.file(async (file) => {
+                    await writeDroppedFile(file, basePath);
+                    resolve();
+                });
+            });
+            return;
+        }
+        if (entry.isDirectory) {
+            const dirPath = `${basePath}/${entry.name}`;
+            await fs.createDir(dirPath);
+            const reader = entry.createReader();
+            const readEntries = async () => {
+                const entries = await new Promise((resolve) => reader.readEntries(resolve));
+                if (!entries.length) return;
+                for (const child of entries) {
+                    await walkWebkitEntry(child, dirPath);
+                }
+                await readEntries();
+            };
+            await readEntries();
+        }
+    };
+
     // Handle Drop
     dropZone.addEventListener('drop', async (e) => {
+        const items = Array.from(e.dataTransfer.items || []);
+        const basePath = this.cwd === '/' ? '' : this.cwd;
+
+        if (items.length > 0 && items.some(item => item.kind === 'file')) {
+            this.print(`[Upload] Processing ${items.length} item(s)...`, 'system');
+            for (const item of items) {
+                if (item.kind !== 'file') continue;
+                if (item.getAsFileSystemHandle) {
+                    const handle = await item.getAsFileSystemHandle();
+                    if (!handle) continue;
+                    if (handle.kind === 'file') {
+                        const file = await handle.getFile();
+                        await writeDroppedFile(file, basePath);
+                    } else if (handle.kind === 'directory') {
+                        await walkDirectoryHandle(handle, basePath);
+                    }
+                } else if (item.webkitGetAsEntry) {
+                    const entry = item.webkitGetAsEntry();
+                    if (entry) await walkWebkitEntry(entry, basePath);
+                } else {
+                    const file = item.getAsFile();
+                    if (file) await writeDroppedFile(file, basePath);
+                }
+            }
+            return;
+        }
+
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             this.print(`[Upload] Processing ${files.length} file(s)...`, 'system');
-            
             for (const file of files) {
-                const reader = new FileReader();
-                
-                reader.onload = async (evt) => {
-                    const buffer = evt.target.result; // ArrayBuffer
-                    const savePath = `${this.cwd === '/' ? '' : this.cwd}/${file.name}`;
-                    
-                    const res = await fs.writeFile(savePath, buffer);
-                    if (res.success) {
-                        this.print(`[Upload] Saved: ${savePath}`, 'success');
-                    } else {
-                        this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
-                    }
-                };
-                
-                reader.readAsArrayBuffer(file);
+                await writeDroppedFile(file, basePath);
             }
         }
     });
