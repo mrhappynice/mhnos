@@ -98,7 +98,13 @@ const OS = {
 // --- FILE SYNC HELPER ---
 async function syncFileSystem(worker) {
     // 1. Get the entire tree from OPFS
-    const tree = await fs.getFullTree(); 
+    let tree = [];
+    try {
+        tree = await fs.getFullTree();
+    } catch (e) {
+        OS.shell.print(`[KERNEL] File sync disabled: ${e.message}`, 'system');
+        return;
+    }
     
     if (tree.length > 0) {
         OS.shell.print(`[KERNEL] Syncing filesystem objects...`, 'system');

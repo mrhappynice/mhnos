@@ -667,6 +667,7 @@ export class LauncherApp {
                     <button type="button" class="launcher-search-clear" aria-label="Clear search">×</button>
                 </div>
                 <div class="launcher-status">Indexing...</div>
+                <div class="launcher-warning" hidden></div>
             </div>
             <div class="launcher-results" aria-live="polite"></div>
             <div class="launcher-section-title">Quick Launch</div>
@@ -679,11 +680,12 @@ export class LauncherApp {
         const grid = wrapper.querySelector('.launcher-grid');
         const reindexBtn = wrapper.querySelector('.launcher-reindex');
         const clearBtn = wrapper.querySelector('.launcher-search-clear');
+        const warning = wrapper.querySelector('.launcher-warning');
 
         const config = await this.loadConfig();
         this.renderLaunchCards(grid, config);
 
-        this.buildSearchIndex(status).then(() => {
+        this.buildSearchIndex(status, warning).then(() => {
             if (searchInput.value.trim()) this.runSearch(searchInput.value, results);
         });
 
@@ -699,7 +701,7 @@ export class LauncherApp {
             results.innerHTML = '';
             const freshConfig = await this.loadConfig();
             this.renderLaunchCards(grid, freshConfig);
-            this.buildSearchIndex(status).then(() => {
+            this.buildSearchIndex(status, warning).then(() => {
                 if (searchInput.value.trim()) this.runSearch(searchInput.value, results);
             });
         });
@@ -782,16 +784,28 @@ export class LauncherApp {
         }
     }
 
-    async buildSearchIndex(statusEl) {
+    async buildSearchIndex(statusEl, warningEl = null) {
         if (this.searchIndex) {
             statusEl.textContent = `Indexed ${this.searchIndex.length} file(s)`;
+            if (warningEl) warningEl.hidden = true;
             return this.searchIndex;
         }
         if (this.indexPromise) return this.indexPromise;
 
         statusEl.textContent = 'Indexing...';
         this.indexPromise = (async () => {
-            const tree = await fs.getFullTree();
+            let tree = [];
+            try {
+                tree = await fs.getFullTree();
+                if (warningEl) warningEl.hidden = true;
+            } catch (e) {
+                statusEl.textContent = `Indexing disabled: ${e.message}`;
+                if (warningEl) {
+                    warningEl.hidden = false;
+                    warningEl.textContent = 'OPFS unavailable. File search and sync are disabled in this browser or hosting context.';
+                }
+                return [];
+            }
             const index = [];
             let processed = 0;
 

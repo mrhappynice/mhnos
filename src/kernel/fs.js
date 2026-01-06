@@ -3,8 +3,13 @@
 let rootHandle = null;
 
 async function getRoot() {
-    if (!rootHandle) rootHandle = await navigator.storage.getDirectory();
-    return rootHandle;
+    if (rootHandle) return rootHandle;
+    try {
+        rootHandle = await navigator.storage.getDirectory();
+        return rootHandle;
+    } catch (err) {
+        throw new Error(`OPFS unavailable: ${err.message}`);
+    }
 }
 
 // --- PATH UTILS ---

@@ -410,6 +410,15 @@ body {
     color: #9aa0a6;
 }
 
+.launcher-warning {
+    font-size: 11px;
+    color: #f2c94c;
+    background: #2a2420;
+    border: 1px solid #3a2f1e;
+    padding: 6px 8px;
+    border-radius: 4px;
+}
+
 .launcher-results {
     flex: 1;
     overflow-y: auto;
