@@ -393,31 +393,39 @@ attachDragAndDrop() {
         dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
 
         // --- HELPERS ---
-        const writeDroppedFile = async (file, basePath) => {
+        
+        // Helper: Write a buffer to OPFS
+        const writeBufferToDisk = async (name, buffer, basePath) => {
             try {
-                // arrayBuffer() is reliable on File objects from getAsFile()
-                const buffer = await file.arrayBuffer();
-                const savePath = `${basePath}/${file.name}`;
+                const savePath = `${basePath}/${name}`;
                 const res = await fs.writeFile(savePath, buffer);
                 if (res.success) {
                     this.print(`[Upload] Saved: ${savePath}`, 'success');
                 } else {
-                    this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
+                    this.print(`[Upload] Error saving ${name}: ${res.error}`, 'error');
                 }
             } catch (e) {
-                this.print(`[Upload] Failed to read ${file.name}: ${e.message}`, 'error');
+                this.print(`[Upload] Disk error on ${name}: ${e.message}`, 'error');
             }
         };
 
+        // Helper: Recursive Directory Walker (FileSystemEntry API)
         const walkWebkitEntry = async (entry, basePath) => {
             if (entry.isFile) {
-                // Only use this path if absolutely necessary (nested files in folders)
+                // If we are forced to use Entry API for a file (deep inside a folder),
+                // we wrap it carefully.
                 return new Promise((resolve) => {
                     entry.file(async (file) => {
-                        await writeDroppedFile(file, basePath);
+                        try {
+                            // Read immediately inside callback
+                            const buffer = await file.arrayBuffer();
+                            await writeBufferToDisk(entry.name, buffer, basePath);
+                        } catch(err) {
+                            console.warn(`Failed to read entry ${entry.name}`, err);
+                        }
                         resolve();
                     }, (err) => {
-                        console.warn(`[Upload] Entry access failed: ${entry.name}`, err);
+                        console.warn(`Failed to access entry ${entry.name}`, err);
                         resolve();
                     });
                 });
@@ -432,8 +440,12 @@ attachDragAndDrop() {
                         reader.readEntries(resolve, (err) => { console.warn(err); resolve([]); });
                     });
                     if (!entries || entries.length === 0) return;
-                    for (const child of entries) await walkWebkitEntry(child, dirPath);
-                    await readEntries(); // Continue reading until empty
+                    
+                    // Process children
+                    for (const child of entries) {
+                        await walkWebkitEntry(child, dirPath);
+                    }
+                    await readEntries(); // Keep reading until empty
                 };
                 await readEntries();
             }
@@ -441,63 +453,66 @@ attachDragAndDrop() {
 
         // --- HANDLER ---
         dropZone.addEventListener('drop', async (e) => {
+            // 1. Get items list
             const items = e.dataTransfer.items;
             const basePath = this.cwd === '/' ? '' : this.cwd;
-            const queue = [];
+            
+            // We use 'tasks' to hold Promises. 
+            // We do NOT await inside the collection loop.
+            const tasks = [];
 
-            // 1. COLLECT PHASE (Synchronous)
-            // Grab File objects immediately to prevent "NotFoundError" / Stale handles
             if (items && items.length > 0) {
+                this.print(`[Upload] Detected ${items.length} item(s)...`, 'system');
+
                 for (let i = 0; i < items.length; i++) {
                     const item = items[i];
                     if (item.kind !== 'file') continue;
 
+                    // CHECK 1: Is it a Directory?
+                    // We need webkitGetAsEntry for directories.
                     let entry = null;
                     if (item.webkitGetAsEntry) {
                         entry = item.webkitGetAsEntry();
                     }
 
-                    // CRITICAL FIX:
-                    // If it is a FILE, use getAsFile() immediately. This gives a persistent Blob.
-                    // Only use Entry API if it is a DIRECTORY.
-                    if (entry && entry.isFile) {
+                    if (entry && entry.isDirectory) {
+                        // It's a folder: We must traverse it.
+                        // We push the traversal promise to tasks.
+                        tasks.push(walkWebkitEntry(entry, basePath));
+                    } 
+                    else {
+                        // CHECK 2: It's a File (or we treat it as one)
+                        // CRITICAL: Call getAsFile() AND .arrayBuffer() IMMEDIATELY.
+                        // Do not wait. Initiate the read now.
                         const file = item.getAsFile();
                         if (file) {
-                            queue.push({ type: 'file', data: file });
+                            const readPromise = file.arrayBuffer()
+                                .then(buffer => writeBufferToDisk(file.name, buffer, basePath))
+                                .catch(err => this.print(`[Upload] Read failed ${file.name}: ${err.message}`, 'error'));
+                            
+                            tasks.push(readPromise);
                         }
-                    } 
-                    else if (entry && entry.isDirectory) {
-                        queue.push({ type: 'entry', data: entry });
-                    }
-                    else {
-                        // Fallback
-                        const file = item.getAsFile();
-                        if (file) queue.push({ type: 'file', data: file });
                     }
                 }
             } else {
-                // Fallback for browsers not supporting DataTransferItems
+                // Fallback for files only (no items API)
                 const files = e.dataTransfer.files;
-                if (files) {
+                if (files && files.length > 0) {
+                    this.print(`[Upload] Detected ${files.length} file(s)...`, 'system');
                     for (let i = 0; i < files.length; i++) {
-                        queue.push({ type: 'file', data: files[i] });
+                        const file = files[i];
+                        const readPromise = file.arrayBuffer()
+                            .then(buffer => writeBufferToDisk(file.name, buffer, basePath))
+                            .catch(err => this.print(`[Upload] Read failed ${file.name}: ${err.message}`, 'error'));
+                        tasks.push(readPromise);
                     }
                 }
             }
 
-            if (queue.length === 0) return;
+            if (tasks.length === 0) return;
 
-            this.print(`[Upload] Processing ${queue.length} item(s)...`, 'system');
-
-            // 2. PROCESS PHASE (Async)
-            for (const item of queue) {
-                if (item.type === 'entry') {
-                    await walkWebkitEntry(item.data, basePath);
-                } else {
-                    await writeDroppedFile(item.data, basePath);
-                }
-            }
-            
+            // 2. Wait for all operations to finish
+            await Promise.all(tasks);
             this.print(`[Upload] Complete.`, 'system');
         });
     }
