@@ -442,7 +442,7 @@ export class Shell {
         }
     };
 
- // Handle Drop
+// Handle Drop
     dropZone.addEventListener('drop', async (e) => {
         const items = Array.from(e.dataTransfer.items || []);
         const basePath = this.cwd === '/' ? '' : this.cwd;
@@ -453,27 +453,9 @@ export class Shell {
             for (const item of items) {
                 if (item.kind !== 'file') continue;
 
-                try {
-                    // 1. Try Modern File System Access API (Supports Directories)
-                    if (item.getAsFileSystemHandle) {
-                        const handle = await item.getAsFileSystemHandle();
-                        if (handle) {
-                            if (handle.kind === 'file') {
-                                const file = await handle.getFile();
-                                await writeDroppedFile(file, basePath);
-                            } else if (handle.kind === 'directory') {
-                                await walkDirectoryHandle(handle, basePath);
-                            }
-                            continue; // Success, move to next item
-                        }
-                    }
-                } catch (err) {
-                    // Ignore NotFoundError and fallback to older APIs
-                    // This is where Netlify/HTTPS was crashing
-                    console.warn("[Upload] Modern API failed, falling back:", err);
-                }
-
-                // 2. Fallback: WebKit API (Older Chrome/Safari)
+                // STRATEGY: Use Synchronous APIs first to avoid "Event Cleanup" issues.
+                // 1. Try WebKit Entry (Supports Files AND Directories)
+                // This works in Chrome, Edge, Safari, and Firefox
                 if (item.webkitGetAsEntry) {
                     const entry = item.webkitGetAsEntry();
                     if (entry) {
@@ -482,7 +464,7 @@ export class Shell {
                     }
                 }
 
-                // 3. Fallback: Standard File API (No directory support, but reliable)
+                // 2. Fallback: Standard File API (Files only, no directories)
                 const file = item.getAsFile();
                 if (file) {
                     await writeDroppedFile(file, basePath);
@@ -491,7 +473,7 @@ export class Shell {
             return;
         }
 
-        // Fallback for browsers that don't support DataTransferItems
+        // 3. Last Resort: Files list (No directory support)
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             this.print(`[Upload] Processing ${files.length} file(s)...`, 'system');
