@@ -376,111 +376,131 @@ export class Shell {
         this.print(resultMsg, failed ? 'error' : 'success');
     }
     
-    attachDragAndDrop() {
-    const dropZone = document.body;
+attachDragAndDrop() {
+        const dropZone = document.body;
 
-    // Prevent default browser behavior (opening the file)
-    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-        dropZone.addEventListener(eventName, (e) => {
-            e.preventDefault();
-            e.stopPropagation();
-        }, false);
-    });
+        // Prevent default browser behavior
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropZone.addEventListener(eventName, (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+            }, false);
+        });
 
-    // Visual feedback (optional)
-    dropZone.addEventListener('dragover', () => dropZone.style.boxShadow = 'inset 0 0 20px #0078d7');
-    dropZone.addEventListener('dragleave', () => dropZone.style.boxShadow = 'none');
-    dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
+        // Visual feedback
+        dropZone.addEventListener('dragover', () => dropZone.style.boxShadow = 'inset 0 0 20px #0078d7');
+        dropZone.addEventListener('dragleave', () => dropZone.style.boxShadow = 'none');
+        dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
 
-    const writeDroppedFile = async (file, basePath) => {
-        const buffer = await file.arrayBuffer();
-        const savePath = `${basePath}/${file.name}`;
-        const res = await fs.writeFile(savePath, buffer);
-        if (res.success) {
-            this.print(`[Upload] Saved: ${savePath}`, 'success');
-        } else {
-            this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
-        }
-    };
-
-    const walkDirectoryHandle = async (dirHandle, basePath) => {
-        const dirPath = `${basePath}/${dirHandle.name}`;
-        await fs.createDir(dirPath);
-        for await (const entry of dirHandle.values()) {
-            if (entry.kind === 'file') {
-                const file = await entry.getFile();
-                await writeDroppedFile(file, dirPath);
-            } else if (entry.kind === 'directory') {
-                await walkDirectoryHandle(entry, dirPath);
-            }
-        }
-    };
-
-    const walkWebkitEntry = async (entry, basePath) => {
-        if (entry.isFile) {
-            await new Promise((resolve) => {
-                entry.file(async (file) => {
-                    await writeDroppedFile(file, basePath);
-                    resolve();
-                });
-            });
-            return;
-        }
-        if (entry.isDirectory) {
-            const dirPath = `${basePath}/${entry.name}`;
-            await fs.createDir(dirPath);
-            const reader = entry.createReader();
-            const readEntries = async () => {
-                const entries = await new Promise((resolve) => reader.readEntries(resolve));
-                if (!entries.length) return;
-                for (const child of entries) {
-                    await walkWebkitEntry(child, dirPath);
+        // --- HELPERS ---
+        const writeDroppedFile = async (file, basePath) => {
+            try {
+                const buffer = await file.arrayBuffer();
+                const savePath = `${basePath}/${file.name}`;
+                const res = await fs.writeFile(savePath, buffer);
+                if (res.success) {
+                    this.print(`[Upload] Saved: ${savePath}`, 'success');
+                } else {
+                    this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
                 }
+            } catch (e) {
+                this.print(`[Upload] Failed to read ${file.name}`, 'error');
+            }
+        };
+
+        const walkWebkitEntry = async (entry, basePath) => {
+            if (entry.isFile) {
+                // Must wrap callback-based entry.file in a Promise
+                return new Promise((resolve) => {
+                    entry.file(
+                        async (file) => {
+                            await writeDroppedFile(file, basePath);
+                            resolve();
+                        },
+                        (err) => {
+                            console.warn(`[Upload] Skipped ${entry.name}:`, err);
+                            resolve(); // Resolve anyway to avoid hanging
+                        }
+                    );
+                });
+            }
+            if (entry.isDirectory) {
+                const dirPath = `${basePath}/${entry.name}`;
+                await fs.createDir(dirPath);
+                
+                const reader = entry.createReader();
+                const readEntries = async () => {
+                    // readEntries must be called repeatedly until empty
+                    const entries = await new Promise((resolve) => {
+                        reader.readEntries(
+                            (results) => resolve(results),
+                            (err) => { console.warn(err); resolve([]); }
+                        );
+                    });
+                    
+                    if (!entries || entries.length === 0) return;
+                    
+                    for (const child of entries) {
+                        await walkWebkitEntry(child, dirPath);
+                    }
+                    await readEntries(); // Continue reading
+                };
                 await readEntries();
-            };
-            await readEntries();
-        }
-    };
+            }
+        };
 
-// Handle Drop
-    dropZone.addEventListener('drop', async (e) => {
-        const items = Array.from(e.dataTransfer.items || []);
-        const basePath = this.cwd === '/' ? '' : this.cwd;
+        // --- HANDLER ---
+        dropZone.addEventListener('drop', async (e) => {
+            const items = e.dataTransfer.items;
+            const basePath = this.cwd === '/' ? '' : this.cwd;
+            const queue = [];
 
-        if (items.length > 0 && items.some(item => item.kind === 'file')) {
-            this.print(`[Upload] Processing ${items.length} item(s)...`, 'system');
-            
-            for (const item of items) {
-                if (item.kind !== 'file') continue;
+            // 1. COLLECT PHASE (Synchronous)
+            // We MUST grab all entries/files before any 'await' happens, 
+            // otherwise the browser clears dataTransfer.
+            if (items && items.length > 0) {
+                for (let i = 0; i < items.length; i++) {
+                    const item = items[i];
+                    if (item.kind !== 'file') continue;
 
-                // STRATEGY: Use Synchronous APIs first to avoid "Event Cleanup" issues.
-                // 1. Try WebKit Entry (Supports Files AND Directories)
-                // This works in Chrome, Edge, Safari, and Firefox
-                if (item.webkitGetAsEntry) {
-                    const entry = item.webkitGetAsEntry();
-                    if (entry) {
-                        await walkWebkitEntry(entry, basePath);
-                        continue;
+                    // Prefer WebKitGetAsEntry (supports folders)
+                    if (item.webkitGetAsEntry) {
+                        const entry = item.webkitGetAsEntry();
+                        if (entry) {
+                            queue.push({ type: 'entry', data: entry });
+                            continue;
+                        }
+                    } 
+                    
+                    // Fallback to getAsFile
+                    const file = item.getAsFile();
+                    if (file) queue.push({ type: 'file', data: file });
+                }
+            } else {
+                // Fallback for older browsers
+                const files = e.dataTransfer.files;
+                if (files) {
+                    for (let i = 0; i < files.length; i++) {
+                        queue.push({ type: 'file', data: files[i] });
                     }
                 }
+            }
 
-                // 2. Fallback: Standard File API (Files only, no directories)
-                const file = item.getAsFile();
-                if (file) {
-                    await writeDroppedFile(file, basePath);
+            if (queue.length === 0) return;
+
+            this.print(`[Upload] Processing ${queue.length} item(s)...`, 'system');
+
+            // 2. PROCESS PHASE (Async)
+            // Now we can safely await without breaking the dataTransfer connection
+            for (const item of queue) {
+                if (item.type === 'entry') {
+                    await walkWebkitEntry(item.data, basePath);
+                } else {
+                    await writeDroppedFile(item.data, basePath);
                 }
             }
-            return;
-        }
-
-        // 3. Last Resort: Files list (No directory support)
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            this.print(`[Upload] Processing ${files.length} file(s)...`, 'system');
-            for (const file of files) {
-                await writeDroppedFile(file, basePath);
-            }
-        }
-    });
-}
+            
+            this.print(`[Upload] Complete.`, 'system');
+        });
+    }
 }
