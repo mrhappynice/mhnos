@@ -17,6 +17,7 @@ Common commands:
 - `cd <path>` - change directory
 - `mkdir <name>` - create directory
 - `rm <path>` - remove file/dir
+- `upload` - upload files from your computer
 - `cat <file>` - print file
 - `edit <file>` - open Nano editor
 - `md <file>` - open Markdown preview mode
@@ -24,8 +25,8 @@ Common commands:
 - `browser` - open the internal browser app
 - `files` - open the file explorer
 - `launcher` - open the launcher
-- ` gitclone` - download github repo   
-  exampe - downloads the repo to the directory:  
+- `gitclone` - download github repo  
+  example - downloads the repo to the directory:  
   `gitclone https://github.com/mrhappynice/lifeman.git lifeman`
 
 ## Filesystem (OPFS)
@@ -34,9 +35,10 @@ The OS stores files in the browser's Origin Private File System (OPFS).
 
 Add files:
 
-- Drag and drop files onto the desktop to upload into the current directory.
-- Use `edit /path/file.txt` to create or edit a file.
-- Use `mkdir /path/folder` for new folders.
+- **Upload Files**: Type `upload` to open the native file picker and select one or more files. They will be saved to your current directory.
+- **Upload Folders**: Type `upload folder` to select a directory. This preserves the folder structure and uploads all files inside.
+- **Create**: Use `edit /path/file.txt` to create or edit a file manually.
+- **Make Dirs**: Use `mkdir /path/folder` for new folders.
 
 Search files:
 
@@ -80,20 +82,20 @@ When you click `Reindex` the first time, the launcher auto-populates any missing
 
 Use the built-in package manager to install and run Express.
 
-1) Create a project folder:
+1. Create a project folder:
 
 ```sh
 mkdir /projects
 cd /projects
 ```
 
-2) Install Express:
+2. Install Express:
 
 ```sh
 npm install express
 ```
 
-3) Create a server file:
+3. Create a server file:
 
 ```sh
 edit server.js
@@ -114,13 +116,13 @@ app.listen(3000, () => {
 });
 ```
 
-4) Run the server:
+4. Run the server:
 
 ```sh
 run server.js
 ```
 
-5) Open the browser app (launcher or command) and visit:
+5. Open the browser app (launcher or command) and visit:
 
 ```
 localhost:3000
