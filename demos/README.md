@@ -24,6 +24,9 @@ Common commands:
 - `browser` - open the internal browser app
 - `files` - open the file explorer
 - `launcher` - open the launcher
+- ` gitclone` - download github repo   
+  exampe - downloads the repo to the directory:  
+  `gitclone https://github.com/mrhappynice/lifeman.git lifeman`
 
 ## Filesystem (OPFS)
 
@@ -93,7 +96,7 @@ npm install express
 3) Create a server file:
 
 ```sh
-edit /projects/server.js
+edit server.js
 ```
 
 Example server:
@@ -114,16 +117,16 @@ app.listen(3000, () => {
 4) Run the server:
 
 ```sh
-run /projects/server.js
+run server.js
 ```
 
-5) Open the browser app and visit:
+5) Open the browser app (launcher or command) and visit:
 
 ```
 localhost:3000
 ```
 
-## Static seeds (before deploying)
+## Dev - Deploying MHNOS notes
 
 To ship defaults before deploying:
 
