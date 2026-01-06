@@ -24,6 +24,69 @@ export class Shell {
             'clear': () => this.output.innerHTML = '',
             'cls': () => this.output.innerHTML = '',
             
+                        'upload': (args) => {
+                // Usage: 'upload' for files, 'upload folder' for directories
+                const isFolder = args[0] === 'folder' || args[0] === '-r';
+                
+                const input = document.createElement('input');
+                input.type = 'file';
+                input.style.display = 'none'; // Keep it hidden
+                
+                if (isFolder) {
+                    input.setAttribute('webkitdirectory', '');
+                    input.setAttribute('directory', '');
+                } else {
+                    input.setAttribute('multiple', '');
+                }
+
+                input.onchange = async () => {
+                    const files = Array.from(input.files);
+                    if (files.length === 0) return;
+
+                    this.print(`[Upload] Processing ${files.length} items...`, 'system');
+                    let successCount = 0;
+
+                    for (const file of files) {
+                        try {
+                            const buffer = await file.arrayBuffer();
+                            
+                            // Determine Path
+                            let relPath = file.name;
+                            
+                            // If uploading a folder, use the relative path (e.g. "myFolder/sub/file.txt")
+                            if (isFolder && file.webkitRelativePath) {
+                                relPath = file.webkitRelativePath;
+                            }
+                            
+                            // Combine with Current Working Directory
+                            // If CWD is /projects and file is server.js -> /projects/server.js
+                            // If CWD is / and file is folder/file.txt -> /folder/file.txt
+                            const fullPath = this.cwd === '/' 
+                                ? `/${relPath}` 
+                                : `${this.cwd}/${relPath}`;
+
+                            // fs.writeFile handles creating intermediate directories automatically
+                            const res = await fs.writeFile(fullPath, buffer);
+                            
+                            if (res.success) {
+                                successCount++;
+                                // Optional: Don't spam log for massive folders
+                                if (files.length < 20) this.print(`Saved: ${fullPath}`, 'success');
+                            } else {
+                                this.print(`Error saving ${file.name}: ${res.error}`, 'error');
+                            }
+                        } catch (e) {
+                            this.print(`Failed to read ${file.name}: ${e.message}`, 'error');
+                        }
+                    }
+                    this.print(`[Upload] Finished. ${successCount}/${files.length} saved.`, 'accent');
+                    input.remove(); // Cleanup
+                };
+
+                document.body.appendChild(input);
+                input.click();
+            },
+            
             // --- DIRECTORY COMMANDS ---
             'pwd': () => this.print(this.cwd),
 
@@ -376,144 +439,108 @@ export class Shell {
         this.print(resultMsg, failed ? 'error' : 'success');
     }
     
-attachDragAndDrop() {
-        const dropZone = document.body;
+    attachDragAndDrop() {
+    const dropZone = document.body;
 
-        // Prevent default browser behavior
-        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-            dropZone.addEventListener(eventName, (e) => {
-                e.preventDefault();
-                e.stopPropagation();
-            }, false);
-        });
+    // Prevent default browser behavior (opening the file)
+    ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+        dropZone.addEventListener(eventName, (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+        }, false);
+    });
 
-        // Visual feedback
-        dropZone.addEventListener('dragover', () => dropZone.style.boxShadow = 'inset 0 0 20px #0078d7');
-        dropZone.addEventListener('dragleave', () => dropZone.style.boxShadow = 'none');
-        dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
+    // Visual feedback (optional)
+    dropZone.addEventListener('dragover', () => dropZone.style.boxShadow = 'inset 0 0 20px #0078d7');
+    dropZone.addEventListener('dragleave', () => dropZone.style.boxShadow = 'none');
+    dropZone.addEventListener('drop', () => dropZone.style.boxShadow = 'none');
 
-        // --- HELPERS ---
-        
-        // Helper: Write a buffer to OPFS
-        const writeBufferToDisk = async (name, buffer, basePath) => {
-            try {
-                const savePath = `${basePath}/${name}`;
-                const res = await fs.writeFile(savePath, buffer);
-                if (res.success) {
-                    this.print(`[Upload] Saved: ${savePath}`, 'success');
-                } else {
-                    this.print(`[Upload] Error saving ${name}: ${res.error}`, 'error');
-                }
-            } catch (e) {
-                this.print(`[Upload] Disk error on ${name}: ${e.message}`, 'error');
+    const writeDroppedFile = async (file, basePath) => {
+        const buffer = await file.arrayBuffer();
+        const savePath = `${basePath}/${file.name}`;
+        const res = await fs.writeFile(savePath, buffer);
+        if (res.success) {
+            this.print(`[Upload] Saved: ${savePath}`, 'success');
+        } else {
+            this.print(`[Upload] Error saving ${file.name}: ${res.error}`, 'error');
+        }
+    };
+
+    const walkDirectoryHandle = async (dirHandle, basePath) => {
+        const dirPath = `${basePath}/${dirHandle.name}`;
+        await fs.createDir(dirPath);
+        for await (const entry of dirHandle.values()) {
+            if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                await writeDroppedFile(file, dirPath);
+            } else if (entry.kind === 'directory') {
+                await walkDirectoryHandle(entry, dirPath);
             }
-        };
+        }
+    };
 
-        // Helper: Recursive Directory Walker (FileSystemEntry API)
-        const walkWebkitEntry = async (entry, basePath) => {
-            if (entry.isFile) {
-                // If we are forced to use Entry API for a file (deep inside a folder),
-                // we wrap it carefully.
-                return new Promise((resolve) => {
-                    entry.file(async (file) => {
-                        try {
-                            // Read immediately inside callback
-                            const buffer = await file.arrayBuffer();
-                            await writeBufferToDisk(entry.name, buffer, basePath);
-                        } catch(err) {
-                            console.warn(`Failed to read entry ${entry.name}`, err);
-                        }
-                        resolve();
-                    }, (err) => {
-                        console.warn(`Failed to access entry ${entry.name}`, err);
-                        resolve();
-                    });
+    const walkWebkitEntry = async (entry, basePath) => {
+        if (entry.isFile) {
+            await new Promise((resolve) => {
+                entry.file(async (file) => {
+                    await writeDroppedFile(file, basePath);
+                    resolve();
                 });
-            }
-            if (entry.isDirectory) {
-                const dirPath = `${basePath}/${entry.name}`;
-                await fs.createDir(dirPath);
-                
-                const reader = entry.createReader();
-                const readEntries = async () => {
-                    const entries = await new Promise((resolve) => {
-                        reader.readEntries(resolve, (err) => { console.warn(err); resolve([]); });
-                    });
-                    if (!entries || entries.length === 0) return;
-                    
-                    // Process children
-                    for (const child of entries) {
-                        await walkWebkitEntry(child, dirPath);
-                    }
-                    await readEntries(); // Keep reading until empty
-                };
+            });
+            return;
+        }
+        if (entry.isDirectory) {
+            const dirPath = `${basePath}/${entry.name}`;
+            await fs.createDir(dirPath);
+            const reader = entry.createReader();
+            const readEntries = async () => {
+                const entries = await new Promise((resolve) => reader.readEntries(resolve));
+                if (!entries.length) return;
+                for (const child of entries) {
+                    await walkWebkitEntry(child, dirPath);
+                }
                 await readEntries();
-            }
-        };
+            };
+            await readEntries();
+        }
+    };
 
-        // --- HANDLER ---
-        dropZone.addEventListener('drop', async (e) => {
-            // 1. Get items list
-            const items = e.dataTransfer.items;
-            const basePath = this.cwd === '/' ? '' : this.cwd;
-            
-            // We use 'tasks' to hold Promises. 
-            // We do NOT await inside the collection loop.
-            const tasks = [];
+    // Handle Drop
+    dropZone.addEventListener('drop', async (e) => {
+        const items = Array.from(e.dataTransfer.items || []);
+        const basePath = this.cwd === '/' ? '' : this.cwd;
 
-            if (items && items.length > 0) {
-                this.print(`[Upload] Detected ${items.length} item(s)...`, 'system');
-
-                for (let i = 0; i < items.length; i++) {
-                    const item = items[i];
-                    if (item.kind !== 'file') continue;
-
-                    // CHECK 1: Is it a Directory?
-                    // We need webkitGetAsEntry for directories.
-                    let entry = null;
-                    if (item.webkitGetAsEntry) {
-                        entry = item.webkitGetAsEntry();
+        if (items.length > 0 && items.some(item => item.kind === 'file')) {
+            this.print(`[Upload] Processing ${items.length} item(s)...`, 'system');
+            for (const item of items) {
+                if (item.kind !== 'file') continue;
+                if (item.getAsFileSystemHandle) {
+                    const handle = await item.getAsFileSystemHandle();
+                    if (!handle) continue;
+                    if (handle.kind === 'file') {
+                        const file = await handle.getFile();
+                        await writeDroppedFile(file, basePath);
+                    } else if (handle.kind === 'directory') {
+                        await walkDirectoryHandle(handle, basePath);
                     }
-
-                    if (entry && entry.isDirectory) {
-                        // It's a folder: We must traverse it.
-                        // We push the traversal promise to tasks.
-                        tasks.push(walkWebkitEntry(entry, basePath));
-                    } 
-                    else {
-                        // CHECK 2: It's a File (or we treat it as one)
-                        // CRITICAL: Call getAsFile() AND .arrayBuffer() IMMEDIATELY.
-                        // Do not wait. Initiate the read now.
-                        const file = item.getAsFile();
-                        if (file) {
-                            const readPromise = file.arrayBuffer()
-                                .then(buffer => writeBufferToDisk(file.name, buffer, basePath))
-                                .catch(err => this.print(`[Upload] Read failed ${file.name}: ${err.message}`, 'error'));
-                            
-                            tasks.push(readPromise);
-                        }
-                    }
-                }
-            } else {
-                // Fallback for files only (no items API)
-                const files = e.dataTransfer.files;
-                if (files && files.length > 0) {
-                    this.print(`[Upload] Detected ${files.length} file(s)...`, 'system');
-                    for (let i = 0; i < files.length; i++) {
-                        const file = files[i];
-                        const readPromise = file.arrayBuffer()
-                            .then(buffer => writeBufferToDisk(file.name, buffer, basePath))
-                            .catch(err => this.print(`[Upload] Read failed ${file.name}: ${err.message}`, 'error'));
-                        tasks.push(readPromise);
-                    }
+                } else if (item.webkitGetAsEntry) {
+                    const entry = item.webkitGetAsEntry();
+                    if (entry) await walkWebkitEntry(entry, basePath);
+                } else {
+                    const file = item.getAsFile();
+                    if (file) await writeDroppedFile(file, basePath);
                 }
             }
+            return;
+        }
 
-            if (tasks.length === 0) return;
-
-            // 2. Wait for all operations to finish
-            await Promise.all(tasks);
-            this.print(`[Upload] Complete.`, 'system');
-        });
-    }
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            this.print(`[Upload] Processing ${files.length} file(s)...`, 'system');
+            for (const file of files) {
+                await writeDroppedFile(file, basePath);
+            }
+        }
+    });
+}
 }
