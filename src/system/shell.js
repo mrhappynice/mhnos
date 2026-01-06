@@ -442,35 +442,56 @@ export class Shell {
         }
     };
 
-    // Handle Drop
+ // Handle Drop
     dropZone.addEventListener('drop', async (e) => {
         const items = Array.from(e.dataTransfer.items || []);
         const basePath = this.cwd === '/' ? '' : this.cwd;
 
         if (items.length > 0 && items.some(item => item.kind === 'file')) {
             this.print(`[Upload] Processing ${items.length} item(s)...`, 'system');
+            
             for (const item of items) {
                 if (item.kind !== 'file') continue;
-                if (item.getAsFileSystemHandle) {
-                    const handle = await item.getAsFileSystemHandle();
-                    if (!handle) continue;
-                    if (handle.kind === 'file') {
-                        const file = await handle.getFile();
-                        await writeDroppedFile(file, basePath);
-                    } else if (handle.kind === 'directory') {
-                        await walkDirectoryHandle(handle, basePath);
+
+                try {
+                    // 1. Try Modern File System Access API (Supports Directories)
+                    if (item.getAsFileSystemHandle) {
+                        const handle = await item.getAsFileSystemHandle();
+                        if (handle) {
+                            if (handle.kind === 'file') {
+                                const file = await handle.getFile();
+                                await writeDroppedFile(file, basePath);
+                            } else if (handle.kind === 'directory') {
+                                await walkDirectoryHandle(handle, basePath);
+                            }
+                            continue; // Success, move to next item
+                        }
                     }
-                } else if (item.webkitGetAsEntry) {
+                } catch (err) {
+                    // Ignore NotFoundError and fallback to older APIs
+                    // This is where Netlify/HTTPS was crashing
+                    console.warn("[Upload] Modern API failed, falling back:", err);
+                }
+
+                // 2. Fallback: WebKit API (Older Chrome/Safari)
+                if (item.webkitGetAsEntry) {
                     const entry = item.webkitGetAsEntry();
-                    if (entry) await walkWebkitEntry(entry, basePath);
-                } else {
-                    const file = item.getAsFile();
-                    if (file) await writeDroppedFile(file, basePath);
+                    if (entry) {
+                        await walkWebkitEntry(entry, basePath);
+                        continue;
+                    }
+                }
+
+                // 3. Fallback: Standard File API (No directory support, but reliable)
+                const file = item.getAsFile();
+                if (file) {
+                    await writeDroppedFile(file, basePath);
                 }
             }
             return;
         }
 
+        // Fallback for browsers that don't support DataTransferItems
         const files = e.dataTransfer.files;
         if (files.length > 0) {
             this.print(`[Upload] Processing ${files.length} file(s)...`, 'system');
