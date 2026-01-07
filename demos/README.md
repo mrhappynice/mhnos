@@ -25,9 +25,10 @@ Common commands:
 - `browser` - open the internal browser app
 - `files` - open the file explorer
 - `launcher` - open the launcher
-- `gitclone` - download github repo  
+- `gitclone` - download github repo   
   example - downloads the repo to the directory:  
   `gitclone https://github.com/mrhappynice/lifeman.git lifeman`
+- `backup` - manage encrypted backups (local zip or S3-compatible)
 
 ## Filesystem (OPFS)
 
@@ -44,6 +45,83 @@ Search files:
 
 - Use the Launcher search input for instant lexical search across text files (code, md, json, txt, etc.).
 - Click any search result to open it in the editor.
+
+## Backup and Restore
+
+Backups are encrypted in the browser with AES-GCM and a passphrase you enter each time (the passphrase is never stored).
+
+### Configure remote (S3-compatible)
+
+```sh
+backup config set
+```
+
+Then fill in:
+- endpoint (R2 or MinIO URL)
+- bucket
+- region (use `auto` for R2)
+- access key / secret
+- optional prefix
+
+Show config:
+
+```sh
+backup config show
+```
+
+### Remote backup/restore
+
+```sh
+backup push
+backup list
+backup pull
+```
+
+### Local zip backup/restore
+
+```sh
+backup local push
+backup local pull
+```
+
+Notes:
+- Local backups are stored as a `.zip` with no compression for speed.
+- Each file is encrypted and stored in the zip alongside a `backup.json` manifest.
+
+### CORS setup (browser access)
+
+Cloudflare R2 (JSON in dashboard):
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-origin.example"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+MinIO (JSON for `mc cors set` or console):
+
+```json
+[
+  {
+    "AllowedOrigins": ["https://your-origin.example"],
+    "AllowedMethods": ["GET", "PUT", "HEAD"],
+    "AllowedHeaders": ["*"],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3600
+  }
+]
+```
+
+Notes:
+- Use your exact app origin (including scheme + port).
+- R2 endpoint format: `https://<accountid>.r2.cloudflarestorage.com`
+- MinIO endpoint format: `https://<host>:<port>`
 
 ## Launcher
 
@@ -82,20 +160,20 @@ When you click `Reindex` the first time, the launcher auto-populates any missing
 
 Use the built-in package manager to install and run Express.
 
-1. Create a project folder:
+1) Create a project folder:
 
 ```sh
 mkdir /projects
 cd /projects
 ```
 
-2. Install Express:
+2) Install Express:
 
 ```sh
 npm install express
 ```
 
-3. Create a server file:
+3) Create a server file:
 
 ```sh
 edit server.js
@@ -116,13 +194,13 @@ app.listen(3000, () => {
 });
 ```
 
-4. Run the server:
+4) Run the server:
 
 ```sh
 run server.js
 ```
 
-5. Open the browser app (launcher or command) and visit:
+5) Open the browser app (launcher or command) and visit:
 
 ```
 localhost:3000

@@ -1,4 +1,5 @@
 import * as fs from '../kernel/fs.js';
+import { runBackupCommand } from './backup.js';
 import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp } from './apps.js';
 import { PackageManager } from './npm.js';
 
@@ -20,7 +21,29 @@ export class Shell {
         this.npm = new PackageManager(this);
 
         this.commands = {
-            'help': () => this.print("Commands: ls, cd, mkdir, rm, pwd, npm, edit, md, run, gitclone, browser, files, launcher, ps, kill, clear"),
+            'help': () => {
+                this.print("Commands:", 'system');
+                this.print("  help                 - show this help", 'system');
+                this.print("  clear / cls          - clear the terminal", 'system');
+                this.print("  ls [path]            - list files", 'system');
+                this.print("  cd [path]            - change directory", 'system');
+                this.print("  pwd                  - print working directory", 'system');
+                this.print("  mkdir <name>         - create directory", 'system');
+                this.print("  rm <path>            - remove file/dir", 'system');
+                this.print("  cat <file>           - print file", 'system');
+                this.print("  edit <file>          - open editor", 'system');
+                this.print("  md <file>            - open markdown preview", 'system');
+                this.print("  run <file>           - run a JS process", 'system');
+                this.print("  npm install <pkg>    - install npm package", 'system');
+                this.print("  upload [folder|-r]   - upload files or folder", 'system');
+                this.print("  gitclone <url> [dir] - clone a repo", 'system');
+                this.print("  browser              - open browser app", 'system');
+                this.print("  files                - open file explorer", 'system');
+                this.print("  launcher             - open launcher", 'system');
+                this.print("  ps                   - list processes", 'system');
+                this.print("  kill <pid>           - kill a process", 'system');
+                this.print("  backup               - encrypted backup/restore", 'system');
+            },
             'clear': () => this.output.innerHTML = '',
             'cls': () => this.output.innerHTML = '',
             
@@ -218,6 +241,8 @@ export class Shell {
                 if (!url) return this.print("Usage: gitclone <git-url> [dest]", 'error');
                 await this.downloadGitHubRepo(url, dest);
             },
+
+            'backup': (args) => runBackupCommand(this, args),
 
             // --- APPS ---
             'files': () => new FileExplorer(this.os).open(this.cwd),

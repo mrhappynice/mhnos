@@ -340,10 +340,10 @@ export class Nano {
     constructor(os) { this.os = os; }
     
     open(filename = 'untitled.js', content = '', options = {}) {
-        const width = Math.floor(window.innerWidth * 0.85);
-        const height = Math.floor(window.innerHeight * 0.85);
-        const x = (window.innerWidth - width) / 2;
-        const y = (window.innerHeight - height) / 2;
+        const width = Math.floor(window.innerWidth * 0.44);
+        const height = Math.floor(window.innerHeight * 0.77);
+        const x = (window.innerWidth - width) / 1.88;
+        const y = (window.innerHeight - height) / 2.88;
 
         // Container (Uses CSS Grid)
         const div = document.createElement('div');
