@@ -200,6 +200,69 @@ app.listen(3000, () => {
 run server.js
 ```
 
+## Test Servers Demo Repo
+
+You can pull the two-server Control Hub demo via gitclone:
+
+```sh
+gitclone https://github.com/mrhappynice/mhnos-test-servers.git test-repo
+```
+
+Start the servers (two processes):
+
+```sh
+cd /test-repo
+npm install
+run servers/worker.js
+run servers/control.js
+```
+
+Open the UI:
+
+```sh
+browser
+```
+
+Then set the URL to:
+
+```
+localhost:3000
+```
+
+Notes:
+- The Control server hosts the UI (port 3000).
+- The Worker server exposes the JSON API (port 4000).
+- Actions on the UI trigger worker tasks like parse, generate, search, and remote fetch.
+
+### Build your own servers
+
+Use these patterns to create new services:
+
+1) Make a simple server file:
+
+```js
+const http = require('http');
+
+http.createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('Hello from MHNOS');
+}).listen(3000);
+```
+
+2) Run it:
+
+```sh
+run server.js
+```
+
+3) Open it in the browser:
+
+```
+localhost:3000
+```
+
+Tip: to add dependencies, create `package.json` and use `npm install` in that directory to install all dependencies listed there.
+
 5) Open the browser app (launcher or command) and visit:
 
 ```

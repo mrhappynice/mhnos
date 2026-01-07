@@ -497,13 +497,20 @@ export class GfxDisplay {
 
 
 export class BrowserApp {
-    constructor(os) { this.os = os; }
+    constructor(os) {
+        this.os = os;
+        this.messageHandler = null;
+        this.currentFrame = null;
+        this.urlInput = null;
+        this.viewport = null;
+    }
 
     open(initialUrl = 'localhost:3000') {
         const win = this.os.wm.createWindow('Web Browser', this.render(initialUrl), { width: 600, height: 450 });
-        const viewport = win.querySelector('.browser-viewport');
-        const input = win.querySelector('.url-bar');
-        this.navigate(viewport, input.value, input);
+        this.viewport = win.querySelector('.browser-viewport');
+        this.urlInput = win.querySelector('.url-bar');
+        this.attachMessageBridge();
+        this.navigate(this.viewport, this.urlInput.value, this.urlInput);
     }
 
     render(url) {
@@ -518,12 +525,25 @@ export class BrowserApp {
         `;
         div.querySelector('.btn-go').onclick = () => {
              const vp = div.querySelector('.browser-viewport');
-             this.navigate(vp, div.querySelector('.url-bar').value);
+             this.navigate(vp, div.querySelector('.url-bar').value, div.querySelector('.url-bar'));
         };
         return div;
     }
 
-    async navigate(viewport, url) {
+    attachMessageBridge() {
+        if (this.messageHandler) return;
+        this.messageHandler = (event) => {
+            const data = event && event.data ? event.data : null;
+            if (!data || data.type !== 'MHNOS_NAVIGATE') return;
+            if (!this.currentFrame || event.source !== this.currentFrame.contentWindow) return;
+            if (!data.url || typeof data.url !== 'string') return;
+            if (this.urlInput) this.urlInput.value = data.url;
+            if (this.viewport) this.navigate(this.viewport, data.url, this.urlInput);
+        };
+        window.addEventListener('message', this.messageHandler);
+    }
+
+    async navigate(viewport, url, input = null) {
         viewport.innerHTML = `<div style="padding:20px; color:#666">Connecting to ${url}...</div>`;
         
         try {
@@ -607,6 +627,7 @@ export class BrowserApp {
             iframe.style.cssText = "width:100%; height:100%; border:none;";
             viewport.innerHTML = '';
             viewport.appendChild(iframe);
+            this.currentFrame = iframe;
             
             // Write to iframe doc
             const frameDoc = iframe.contentWindow.document;

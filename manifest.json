@@ -3,6 +3,7 @@
   { "src": "demos/index.html", "dest": "/demos/site/index.html" },
   { "src": "demos/style.css", "dest": "/demos/site/style.css" },
   { "src": "demos/app.js", "dest": "/demos/site/app.js" },
+  { "src": "demos/package.json", "dest": "/demos/site/package.json" },
   { "src": "demos/test-lodash.js", "dest": "/demos/lodash/test-lodash.js" },
   { "src": "demos/list-opfs.js", "dest": "/demos/utils/list-opfs.js" },
   { "src": "demos/wget-url.md", "dest": "/demos/utils/wget-url.md" },

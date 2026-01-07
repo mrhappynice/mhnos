@@ -195,11 +195,16 @@ export class Shell {
             // --- NPM COMMAND (Delegates to PackageManager) ---
             'npm': async (args) => {
                 const [action, pkg] = args;
-                if (action === 'install' && pkg) {
-                    await this.npm.install(pkg);
-                } else {
-                    this.print("Usage: npm install <package>", 'error');
+                if (action === 'install') {
+                    if (!pkg || pkg === 'package.json') {
+                        const path = this.resolvePath(pkg || 'package.json');
+                        await this.npm.installFromPackageJson(path);
+                    } else {
+                        await this.npm.install(pkg);
+                    }
+                    return;
                 }
+                this.print("Usage: npm install <package|package.json>", 'error');
             },
             
             'wget': async (args) => {

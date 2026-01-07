@@ -133,4 +133,31 @@ export class PackageManager {
             this.shell.print(`[NPM] Install Failed: ${e.message}`, 'error');
         }
     }
+
+    async installFromPackageJson(packagePath) {
+        const res = await fs.readFile(packagePath, true);
+        if (!res.success) {
+            this.shell.print(`[NPM] ${packagePath} not found.`, 'error');
+            return;
+        }
+
+        let parsed = null;
+        try {
+            parsed = JSON.parse(res.data);
+        } catch (e) {
+            this.shell.print(`[NPM] Invalid JSON in ${packagePath}.`, 'error');
+            return;
+        }
+
+        const deps = parsed && parsed.dependencies ? Object.keys(parsed.dependencies) : [];
+        if (deps.length === 0) {
+            this.shell.print('[NPM] No dependencies found in package.json.', 'system');
+            return;
+        }
+
+        this.shell.print(`[NPM] Installing ${deps.length} dependencies...`, 'system');
+        for (const dep of deps) {
+            await this.install(dep);
+        }
+    }
 }
