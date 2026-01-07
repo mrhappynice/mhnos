@@ -219,6 +219,7 @@ export async function runBackupCommand(shell, args) {
         shell.print("Usage: backup <config|push|pull|list|local>", 'system');
         shell.print("backup config set  - configure S3 settings", 'system');
         shell.print("backup config show - show current config", 'system');
+        shell.print("backup config test - verify S3 access", 'system');
         shell.print("backup push        - encrypt and upload OPFS", 'system');
         shell.print("backup pull        - restore from remote", 'system');
         shell.print("backup list        - list files from remote manifest", 'system');
@@ -267,7 +268,22 @@ export async function runBackupCommand(shell, args) {
             else shell.print(`Failed to save config: ${res.error}`, 'error');
             return;
         }
-        shell.print('Usage: backup config <show|set>', 'error');
+        if (action === 'test') {
+            const config = await readBackupConfig();
+            if (!config) return shell.print('Backup config missing. Run: backup config set', 'error');
+            const testKey = buildKey(config, `__mhnos_test/${Date.now()}.txt`);
+            const payload = new TextEncoder().encode('mhnos backup test');
+            shell.print('Testing S3 access (PUT + GET)...', 'system');
+            try {
+                await s3PutObject(config, testKey, payload, 'text/plain');
+                await s3GetObject(config, testKey);
+                shell.print('S3 test OK.', 'success');
+            } catch (err) {
+                shell.print(`S3 test failed: ${err.message}`, 'error');
+            }
+            return;
+        }
+        shell.print('Usage: backup config <show|set|test>', 'error');
         return;
     }
 
