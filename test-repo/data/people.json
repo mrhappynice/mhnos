@@ -1,0 +1,9 @@
+[
+  {"name":"Nova Lane","role":"Navigator","location":"Seattle","tags":["ops","routing"]},
+  {"name":"Kai Rivers","role":"Engineer","location":"Berlin","tags":["systems","runtime"]},
+  {"name":"Aria Patel","role":"Analyst","location":"Seoul","tags":["metrics","insight"]},
+  {"name":"Noah Brooks","role":"Developer","location":"Austin","tags":["ui","tools"]},
+  {"name":"Maya Singh","role":"Researcher","location":"Toronto","tags":["search","data"]},
+  {"name":"Luca Mori","role":"Designer","location":"Milan","tags":["ux","interface"]},
+  {"name":"Zara Chen","role":"Engineer","location":"Singapore","tags":["api","infra"]}
+]

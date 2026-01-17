@@ -1,0 +1,11 @@
+project: MHNOS Control Hub
+version: 1.0
+features:
+  - parse
+  - generate
+  - remote
+  - search
+  - write
+owner:
+  name: Nova
+  team: Core OS

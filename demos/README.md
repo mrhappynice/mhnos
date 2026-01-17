@@ -29,6 +29,8 @@ Common commands:
   example - downloads the repo to the directory:  
   `gitclone https://github.com/mrhappynice/lifeman.git lifeman`
 - `backup` - manage encrypted backups (local zip or S3-compatible)
+- `appbuilder` - create your own apps, local and api models
+- `oapp` - launcher your app creations 
 
 ## Filesystem (OPFS)
 
@@ -57,6 +59,7 @@ backup config set
 ```
 
 Then fill in:
+
 - endpoint (R2 or MinIO URL)
 - bucket
 - region (use `auto` for R2)
@@ -85,6 +88,7 @@ backup local pull
 ```
 
 Notes:
+
 - Local backups are stored as a `.zip` with no compression for speed.
 - Each file is encrypted and stored in the zip alongside a `backup.json` manifest.
 
@@ -119,6 +123,7 @@ MinIO (JSON for `mc cors set` or console):
 ```
 
 Notes:
+
 - Use your exact app origin (including scheme + port).
 - R2 endpoint format: `https://<accountid>.r2.cloudflarestorage.com`
 - MinIO endpoint format: `https://<host>:<port>`
@@ -230,6 +235,7 @@ localhost:3000
 ```
 
 Notes:
+
 - The Control server hosts the UI (port 3000).
 - The Worker server exposes the JSON API (port 4000).
 - Actions on the UI trigger worker tasks like parse, generate, search, and remote fetch.
@@ -268,6 +274,51 @@ Tip: to add dependencies, create `package.json` and use `npm install` in that di
 ```
 localhost:3000
 ```
+
+## 
+
+## Creating your own apps - using oapp
+
+Simply have a local model running or use a provider like OpenRouter, OpenAI etc, then tell the App Builder what type of app you would like. It generates the code and shows the rendered page. 
+
+## How to launch an app now outside App Builder
+
+If you generated:
+
+```
+/apps/todo/
+  index.html
+  styles.css
+  app.js
+```
+
+Run:
+
+```
+oapp /apps/todo
+```
+
+That’s it.
+
+---
+
+## Make it easy from the Launcher (optional)
+
+The Launcher already supports `type: "script"` and `type: "app"` (shell command). So to add a tile for a generated app, add an item in `/system/launcher.json` like:
+
+```json
+{
+  "id": "todo",
+  "label": "Todo App",
+  "type": "app",
+  "command": "oapp /apps/todo",
+  "icon": "✅"
+}
+```
+
+---
+
+
 
 ## Dev - Deploying MHNOS notes
 

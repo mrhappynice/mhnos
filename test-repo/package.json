@@ -1,0 +1,13 @@
+{
+  "name": "mhnos-control-hub",
+  "version": "0.1.0",
+  "private": true,
+  "type": "commonjs",
+  "dependencies": {
+    "dayjs": "1.11.10",
+    "fuse.js": "6.6.2",
+    "js-yaml": "4.1.0",
+    "lodash": "4.17.21",
+    "papaparse": "5.4.1"
+  }
+}

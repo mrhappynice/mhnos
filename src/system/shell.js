@@ -1,6 +1,6 @@
 import * as fs from '../kernel/fs.js';
 import { runBackupCommand } from './backup.js';
-import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp } from './apps.js';
+import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp, AppBuilder } from './apps.js';
 import { PackageManager } from './npm.js';
 
 export class Shell {
@@ -191,6 +191,69 @@ export class Shell {
                 }
                 else this.print("File not found.", 'error');
             },
+		
+            // --- launching oapps --- 		
+			'oapp': async (args) => {
+  const folder = (args && args[0]) ? args[0] : '';
+  if (!folder) {
+    this.print('Usage: oapp /apps/<name>', 'error');
+    return;
+  }
+
+  const base = folder.endsWith('/') ? folder.slice(0, -1) : folder;
+
+  const htmlRes = await fs.readFile(`${base}/index.html`, true);
+  const cssRes  = await fs.readFile(`${base}/styles.css`, true);
+  const jsRes   = await fs.readFile(`${base}/app.js`, true);
+
+  if (!htmlRes.success) { this.print(`Missing: ${base}/index.html`, 'error'); return; }
+  if (!cssRes.success)  { this.print(`Missing: ${base}/styles.css`, 'error'); return; }
+  if (!jsRes.success)   { this.print(`Missing: ${base}/app.js`, 'error'); return; }
+
+  const html = htmlRes.data || '';
+  const css  = cssRes.data || '';
+  const js   = jsRes.data || '';
+
+  // Build srcdoc: inline css + js so it runs with no server
+  const srcdoc = buildSrcdoc(html, css, js);
+
+  const viewport = document.createElement('div');
+  viewport.style.cssText = 'width:100%; height:100%; background:#111;';
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'width:100%; height:100%; border:none; background:#fff;';
+  iframe.srcdoc = srcdoc;
+
+  viewport.appendChild(iframe);
+
+  this.os.wm.createWindow(`oapp: ${base}`, viewport, { width: 900, height: 650 });
+  this.print(`[oapp] Launched ${base}`, 'success');
+
+  function buildSrcdoc(indexHtml, cssText, jsText) {
+    let out = indexHtml;
+
+    // swap external file refs if present
+    out = out.replace(
+      /<link[^>]*rel=["']stylesheet["'][^>]*href=["']styles\.css["'][^>]*>/i,
+      `<style>\n${cssText}\n</style>`
+    );
+    out = out.replace(
+      /<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i,
+      `<script>\n${jsText}\n<\/script>`
+    );
+
+    // if they forgot those tags, inject
+    if (!/<style[\s>]/i.test(out)) {
+      out = out.replace(/<\/head>/i, `<style>\n${cssText}\n</style>\n</head>`);
+    }
+    if (!/<script[\s>]/i.test(out)) {
+      out = out.replace(/<\/body>/i, `<script>\n${jsText}\n<\/script>\n</body>`);
+    }
+
+    return out;
+  }
+},
+
 
             // --- NPM COMMAND (Delegates to PackageManager) ---
             'npm': async (args) => {
@@ -251,7 +314,69 @@ export class Shell {
 
             // --- APPS ---
             'files': () => new FileExplorer(this.os).open(this.cwd),
+            'site': async (args) => {
+  const folder = (args && args[0]) ? args[0] : '';
+  if (!folder) {
+    this.print('Usage: site /apps/<name>', 'error');
+    return;
+  }
+
+  const base = folder.endsWith('/') ? folder.slice(0, -1) : folder;
+
+  const htmlRes = await fs.readFile(`${base}/index.html`, true);
+  const cssRes  = await fs.readFile(`${base}/styles.css`, true);
+  const jsRes   = await fs.readFile(`${base}/app.js`, true);
+
+  if (!htmlRes.success) { this.print(`Missing: ${base}/index.html`, 'error'); return; }
+  if (!cssRes.success)  { this.print(`Missing: ${base}/styles.css`, 'error'); return; }
+  if (!jsRes.success)   { this.print(`Missing: ${base}/app.js`, 'error'); return; }
+
+  const html = htmlRes.data || '';
+  const css  = cssRes.data || '';
+  const js   = jsRes.data || '';
+
+  // Build srcdoc: inline css + js so it runs with no server
+  const srcdoc = buildSrcdoc(html, css, js);
+
+  const viewport = document.createElement('div');
+  viewport.style.cssText = 'width:100%; height:100%; background:#111;';
+
+  const iframe = document.createElement('iframe');
+  iframe.style.cssText = 'width:100%; height:100%; border:none; background:#fff;';
+  iframe.srcdoc = srcdoc;
+
+  viewport.appendChild(iframe);
+
+  this.os.wm.createWindow(`Site: ${base}`, viewport, { width: 900, height: 650 });
+  this.print(`[site] Launched ${base}`, 'success');
+
+  function buildSrcdoc(indexHtml, cssText, jsText) {
+    let out = indexHtml;
+
+    // swap external file refs if present
+    out = out.replace(
+      /<link[^>]*rel=["']stylesheet["'][^>]*href=["']styles\.css["'][^>]*>/i,
+      `<style>\n${cssText}\n</style>`
+    );
+    out = out.replace(
+      /<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i,
+      `<script>\n${jsText}\n<\/script>`
+    );
+
+    // if they forgot those tags, inject
+    if (!/<style[\s>]/i.test(out)) {
+      out = out.replace(/<\/head>/i, `<style>\n${cssText}\n</style>\n</head>`);
+    }
+    if (!/<script[\s>]/i.test(out)) {
+      out = out.replace(/<\/body>/i, `<script>\n${jsText}\n<\/script>\n</body>`);
+    }
+
+    return out;
+  }
+},
+
             'browser': () => new BrowserApp(this.os).open(),
+			'appbuilder': () => new AppBuilder(this.os).open(),
             'launcher': () => {
                 if (this.os.launcher) this.os.launcher.open();
                 else new LauncherApp(this.os).open();
