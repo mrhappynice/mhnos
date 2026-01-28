@@ -119,15 +119,11 @@ export const AppBuilderApp = {
         onLog: chunk => (log.textContent += chunk)
       });
 
-      const html = await fs.readFile(`${appDir}/index.html`);
-      const css = await fs.readFile(`${appDir}/styles.css`);
-      const js = await fs.readFile(`${appDir}/app.js`);
-
-      preview.srcdoc = `
-        <style>${css}</style>
-        ${html}
-        <script>${js}<\/script>
-      `;
+      await fs.readFile(`${appDir}/index.html`);
+      if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+        try { await navigator.serviceWorker.ready; } catch {}
+      }
+      preview.src = `${appDir}/index.html`;
 
       lastGenerated = {
         slug,

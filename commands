@@ -1,0 +1,11 @@
+npm install -g react
+
+npm install -g react-dom
+
+oapp build /apps/hello
+
+oapp /apps/hello
+
+oapp /apps/react-test
+
+

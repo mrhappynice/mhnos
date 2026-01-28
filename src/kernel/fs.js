@@ -44,9 +44,19 @@ export async function writeFile(path, content) {
         const writable = await fileHandle.createWritable();
         await writable.write(content);
         await writable.close();
+        try {
+            if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+                navigator.serviceWorker.controller.postMessage({
+                    type: 'FS_FILE_CHANGED',
+                    path
+                });
+            }
+        } catch {
+            // Ignore SW notification errors
+        }
         return { success: true };
-    } catch (err) {
-        return { success: false, error: err.message };
+    } catch {
+        return { success: true, data: { exists: false, isDir: false } };
     }
 }
 
@@ -112,6 +122,24 @@ export async function listFiles(path = '/') {
         });
         
         return { success: true, data: entries };
+    } catch (err) {
+        return { success: false, error: err.message };
+    }
+}
+
+export async function stat(path) {
+    try {
+        if (!path || path === '/') {
+            return { success: true, data: { exists: true, isDir: true } };
+        }
+        try {
+            await resolveHandle(path, false, 'directory');
+            return { success: true, data: { exists: true, isDir: true } };
+        } catch {
+            // ignore, try file
+        }
+        await resolveHandle(path, false, 'file');
+        return { success: true, data: { exists: true, isDir: false } };
     } catch (err) {
         return { success: false, error: err.message };
     }

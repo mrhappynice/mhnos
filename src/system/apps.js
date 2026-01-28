@@ -1,4 +1,5 @@
 import * as fs from '../kernel/fs.js';
+import { runCodingAgentFlow } from './appBuilderFlow.js';
 
 // --- HELPERS ---
 function bufferToBase64(buffer) {
@@ -519,28 +520,16 @@ export class AppBuilder {
 
         const systemPrompt =
             localStorage.getItem('ab_systemPrompt') ||
-            `You build small site-apps for a browser-based OS.
-Return EXACTLY three fenced code blocks in this order:
+            `You are a coding agent working inside a browser-based OS.
+Focus on modifying existing files when possible.
+Prefer small, safe edits and keep the project runnable.
+When you create new files, keep them minimal and documented.
+Avoid build tools that require Node/Bun unless explicitly requested.`;
 
-\`\`\`html
-...index.html...
-\`\`\`
+        const projectRoot =
+            localStorage.getItem('ab_projectRoot') || '/apps/new-project';
 
-\`\`\`css
-...styles.css...
-\`\`\`
-
-\`\`\`js
-...app.js...
-\`\`\`
-
-Rules:
-- index.html must reference styles.css and app.js using relative paths.
-- No build tools, no frameworks requiring Node/Bun.
-- You MAY use CDN <script> tags for small libs (lodash/dayjs/fuse/js-yaml).
-- Keep it self-contained and runnable.`;
-
-        return { provider, model, baseURL, systemPrompt };
+        return { provider, model, baseURL, systemPrompt, projectRoot };
     }
 
     saveState() {
@@ -548,6 +537,9 @@ Rules:
         localStorage.setItem('ab_model', this.state.model);
         localStorage.setItem('ab_baseURL', this.state.baseURL);
         localStorage.setItem('ab_systemPrompt', this.state.systemPrompt);
+        if (this.state.projectRoot) {
+            localStorage.setItem('ab_projectRoot', this.state.projectRoot);
+        }
     }
 
     getApiKey(provider) {
@@ -677,12 +669,16 @@ Rules:
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
+        let sawDelta = false;
+        let rawAll = '';
 
         while (true) {
             const { done, value } = await reader.read();
             if (done) break;
 
-            buffer += decoder.decode(value, { stream: true });
+            const chunk = decoder.decode(value, { stream: true });
+            rawAll += chunk;
+            buffer += chunk;
             const lines = buffer.split('\n');
             buffer = lines.pop() || '';
 
@@ -694,10 +690,26 @@ Rules:
                 try {
                     const json = JSON.parse(payload);
                     const delta = json.choices?.[0]?.delta?.content;
-                    if (delta) onDelta(delta);
+                    if (delta) {
+                        sawDelta = true;
+                        onDelta(delta);
+                    }
                 } catch {
                     // ignore malformed chunks
                 }
+            }
+        }
+
+        if (!sawDelta && rawAll.trim()) {
+            try {
+                const json = JSON.parse(rawAll);
+                const content =
+                    json.choices?.[0]?.message?.content ??
+                    json.choices?.[0]?.text ??
+                    '';
+                if (content) onDelta(content);
+            } catch {
+                // ignore non-json responses
             }
         }
     }
@@ -750,13 +762,13 @@ div.className = "ab-root";
 div.innerHTML = `
   <div class="ab-header">
     <div class="ab-title">
-      <div class="ab-title-main">App Builder</div>
-      <div class="ab-title-sub">Generate /apps/&lt;name&gt; (index.html, styles.css, app.js)</div>
+      <div class="ab-title-main">Coding Agent</div>
+      <div class="ab-title-sub">Plan → modify existing code → install deps → run</div>
     </div>
     <div class="ab-actions">
       <button class="ab-open">Open Folder</button>
       <button class="ab-add" disabled>Add to Launcher</button>
-      <button class="ab-generate ab-primary">Generate</button>
+      <button class="ab-generate ab-primary">Run Agent</button>
     </div>
   </div>
 
@@ -798,20 +810,31 @@ div.innerHTML = `
 
   <div class="ab-row">
     <label class="ab-field ab-name">
-      <span>App name (slug)</span>
-      <input class="ab-name-input" placeholder="my-cool-app" />
+      <span>App folder</span>
+      <input class="ab-name-input" placeholder="/apps/my-project" />
+    </label>
+    <label class="ab-field ab-name">
+      <span>Existing apps</span>
+      <select class="ab-app-list"><option value="">(loading...)</option></select>
+    </label>
+    <label class="ab-field ab-name">
+      <span>New app</span>
+      <div style="display:flex; gap:6px;">
+        <input class="ab-new-app" placeholder="new-app" />
+        <button class="ab-create-app">Create</button>
+      </div>
     </label>
     <div class="ab-status">Idle</div>
   </div>
 
   <div class="ab-main">
     <section class="ab-pane ab-prompt-pane">
-      <div class="ab-pane-head">Prompt</div>
-      <textarea class="ab-prompt" placeholder="Describe the app you want..."></textarea>
+      <div class="ab-pane-head">Goal</div>
+      <textarea class="ab-prompt" placeholder="Describe what you want changed or built..."></textarea>
     </section>
 
     <section class="ab-pane ab-log-pane">
-      <div class="ab-pane-head">LLM Output</div>
+      <div class="ab-pane-head">Agent Log</div>
       <pre class="ab-log"></pre>
     </section>
 
@@ -823,13 +846,16 @@ div.innerHTML = `
 `;
 
 
-        this.os.wm.createWindow('App Builder', div, { width: 980, height: 760 });
+        this.os.wm.createWindow('Coding Agent', div, { width: 980, height: 760 });
 
         const providerEl = div.querySelector('.ab-provider');
         const baseUrlEl = div.querySelector('.ab-baseurl');
         const modelEl = div.querySelector('.ab-model');
         const keyEl = div.querySelector('.ab-key');
         const nameEl = div.querySelector('.ab-name-input');
+        const appListEl = div.querySelector('.ab-app-list');
+        const newAppEl = div.querySelector('.ab-new-app');
+        const createAppBtn = div.querySelector('.ab-create-app');
         const promptEl = div.querySelector('.ab-prompt');
         const sysEl = div.querySelector('.ab-sys');
         const statusEl = div.querySelector('.ab-status');
@@ -845,6 +871,25 @@ div.innerHTML = `
             .filter(Boolean)
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
             .join(' ');
+
+        const findIndexHtml = async (root, depth = 3) => {
+            const queue = [{ path: root, depth }];
+            while (queue.length) {
+                const { path, depth: d } = queue.shift();
+                const res = await fs.listFiles(path);
+                if (!res || !res.success || !Array.isArray(res.data)) continue;
+                for (const entry of res.data) {
+                    const full = path === '/' ? `/${entry.name}` : `${path}/${entry.name}`;
+                    if (entry.type === 'file' && entry.name === 'index.html') {
+                        return full;
+                    }
+                    if (entry.type === 'directory' && d > 0) {
+                        queue.push({ path: full, depth: d - 1 });
+                    }
+                }
+            }
+            return null;
+        };
 
         const addToLauncher = async ({ slug, appDir, label }) => {
             const command = `oapp ${appDir}`;
@@ -879,6 +924,7 @@ div.innerHTML = `
         baseUrlEl.value = this.state.baseURL;
         sysEl.value = this.state.systemPrompt;
         keyEl.value = this.getApiKey(this.state.provider) || '';
+        nameEl.value = this.state.projectRoot || '';
 
         const syncKeyField = () => {
             const p = providerEl.value;
@@ -916,15 +962,68 @@ div.innerHTML = `
             this.setApiKey(providerEl.value, keyEl.value.trim());
         });
 
+        nameEl.addEventListener('change', () => {
+            this.state.projectRoot = (nameEl.value || '').trim();
+            this.saveState();
+        });
+
         sysEl.addEventListener('change', () => {
             this.state.systemPrompt = sysEl.value;
             this.saveState();
         });
 
+        const resolveProjectPath = () => {
+            const raw = (nameEl.value || '').trim() || '/apps/new-project';
+            let normalized = raw;
+            if (!normalized.startsWith('/')) normalized = `/apps/${normalized.replace(/^\/+/, '')}`;
+            if (!normalized.startsWith('/apps/')) {
+                normalized = `/apps/${normalized.replace(/^\/+/, '')}`;
+            }
+            return normalized.replace(/\/+$/, '');
+        };
+
+        const projectSlugFromPath = (path) => {
+            const clean = path.replace(/\/+$/, '');
+            const parts = clean.split('/').filter(Boolean);
+            return parts[parts.length - 1] || 'project';
+        };
+
+        const refreshAppList = async () => {
+            const res = await fs.listFiles('/apps');
+            if (!res || !res.success || !Array.isArray(res.data)) {
+                appListEl.innerHTML = `<option value="">(no /apps)</option>`;
+                return;
+            }
+            const apps = res.data.filter((e) => e.type === 'directory').map((e) => e.name);
+            appListEl.innerHTML = `<option value="">(select app)</option>` +
+                apps.map((name) => `<option value="${name}">${name}</option>`).join('');
+        };
+
+        appListEl.addEventListener('change', () => {
+            const name = appListEl.value;
+            if (!name) return;
+            nameEl.value = `/apps/${name}`;
+            this.state.projectRoot = nameEl.value;
+            this.saveState();
+        });
+
+        createAppBtn.onclick = async () => {
+            const raw = (newAppEl.value || '').trim();
+            if (!raw) return;
+            const slug = raw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+            const path = `/apps/${slug}`;
+            await fs.createDir('/apps');
+            await fs.createDir(path);
+            nameEl.value = path;
+            this.state.projectRoot = path;
+            this.saveState();
+            newAppEl.value = '';
+            await refreshAppList();
+        };
+
         openBtn.onclick = () => {
-            const slug = (nameEl.value || '').trim() || 'new-app';
-            const safe = slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-            this.os.shell.execute(`files /apps/${safe}`);
+            const root = resolveProjectPath();
+            this.os.shell.execute(`files ${root}`);
         };
 
         addBtn.onclick = async () => {
@@ -941,13 +1040,25 @@ div.innerHTML = `
 
         // First model load
         await refreshModels();
+        await refreshAppList();
 
         genBtn.onclick = async () => {
             logEl.textContent = '';
             frameEl.srcdoc = '';
-            const slugRaw = (nameEl.value || 'new-app').trim();
-            const slug = slugRaw.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
-            const appDir = `/apps/${slug}`;
+            frameEl.src = '';
+            let logPhase = null;
+            const appendLog = (chunk, phase) => {
+                const nextPhase = phase || 'generate';
+                if (nextPhase !== logPhase) {
+                    logPhase = nextPhase;
+                    logEl.textContent += `\n\n[${logPhase.toUpperCase()}]\n`;
+                }
+                logEl.textContent += chunk;
+                logEl.scrollTop = logEl.scrollHeight;
+            };
+
+            const projectRoot = resolveProjectPath();
+            const slug = projectSlugFromPath(projectRoot);
 
             const userPrompt = (promptEl.value || '').trim();
             if (!userPrompt) {
@@ -960,56 +1071,89 @@ div.innerHTML = `
             this.state.baseURL = baseUrlEl.value.trim() || this.state.baseURL;
             this.state.model = modelEl.value || this.state.model;
             this.state.systemPrompt = sysEl.value;
+            this.state.projectRoot = projectRoot;
             this.saveState();
             this.setApiKey(this.state.provider, keyEl.value.trim());
 
-            statusEl.textContent = 'Preparing directories...';
-            await fs.createDir('/apps');
-            await fs.createDir(appDir);
-
-            let full = '';
-
             try {
-                const messages = [
-                    { role: 'system', content: this.state.systemPrompt },
-                    { role: 'user', content: `App folder: ${appDir}\n\nTask:\n${userPrompt}\n\nRemember: output ONLY the 3 fenced blocks.` }
-                ];
+                const listRes = await fs.listFiles(projectRoot);
+                const strictRoot = projectRoot.startsWith('/apps/') && listRes && listRes.success && Array.isArray(listRes.data) && listRes.data.length === 0;
 
-                await this.streamChat({
-                    provider: this.state.provider,
-                    model: this.state.model,
-                    messages,
+                const { finalSummary } = await runCodingAgentFlow({
+                    prompt: userPrompt,
+                    fs,
+                    os: this.os,
+                    projectRoot,
+                    systemPrompt: this.state.systemPrompt,
+                    strictRoot,
+                    llm: ({ messages, onDelta }) =>
+                        this.streamChat({
+                            provider: this.state.provider,
+                            model: this.state.model,
+                            messages,
+                            onStatus: (s) => (statusEl.textContent = s),
+                            onDelta
+                        }),
+                    onLog: appendLog,
                     onStatus: (s) => (statusEl.textContent = s),
-                    onDelta: (chunk) => {
-                        full += chunk;
-                        logEl.textContent += chunk;
-                        logEl.scrollTop = logEl.scrollHeight;
-                    }
+                    maxSteps: 10
                 });
 
-                statusEl.textContent = 'Parsing output...';
-                const files = this.extractThreeFiles(full);
-
-                if (!files.html || !files.css || !files.js) {
-                    throw new Error(
-                        'Model did not return all 3 code blocks (html/css/js). Try regenerating with a clearer prompt.'
-                    );
+                const htmlRes = await fs.readFile(`${projectRoot}/index.html`, true);
+                const isAppsProject = projectRoot.startsWith('/apps/');
+                if (htmlRes.success && isAppsProject) {
+                    if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+                        try { await navigator.serviceWorker.ready; } catch {}
+                    }
+                    frameEl.src = `${projectRoot}/index.html`;
+                } else if (htmlRes.success) {
+                    const cssRes = await fs.readFile(`${projectRoot}/styles.css`, true);
+                    const jsRes = await fs.readFile(`${projectRoot}/app.js`, true);
+                    const css = (cssRes && cssRes.success) ? (cssRes.data || '') : '';
+                    const js = (jsRes && jsRes.success) ? (jsRes.data || '') : '';
+                    const srcdoc = this.buildPreviewSrcdoc(htmlRes.data, css, js);
+                    frameEl.srcdoc = srcdoc;
+                } else {
+                    const fallback = await findIndexHtml(projectRoot, 4);
+                    if (fallback) {
+                        const base = fallback.slice(0, fallback.lastIndexOf('/'));
+                        const htmlAlt = await fs.readFile(fallback, true);
+                        if (htmlAlt && htmlAlt.success && base.startsWith('/apps/')) {
+                            if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+                                try { await navigator.serviceWorker.ready; } catch {}
+                            }
+                            frameEl.src = `${base}/index.html`;
+                            appendLog(`\n[WARN] index.html not found at root. Previewing ${fallback}\n`, 'warn');
+                        } else if (htmlAlt && htmlAlt.success) {
+                            const cssAlt = await fs.readFile(`${base}/styles.css`, true);
+                            const jsAlt = await fs.readFile(`${base}/app.js`, true);
+                            const css = (cssAlt && cssAlt.success) ? (cssAlt.data || '') : '';
+                            const js = (jsAlt && jsAlt.success) ? (jsAlt.data || '') : '';
+                            const srcdoc = this.buildPreviewSrcdoc(htmlAlt.data, css, js);
+                            frameEl.srcdoc = srcdoc;
+                            appendLog(`\n[WARN] index.html not found at root. Previewing ${fallback}\n`, 'warn');
+                        } else {
+                            frameEl.srcdoc = `<div style=\"padding:12px;color:#999;font-family:monospace;\">No previewable index.html found in ${projectRoot}.</div>`;
+                        }
+                    } else {
+                        frameEl.srcdoc = `<div style=\"padding:12px;color:#999;font-family:monospace;\">No previewable index.html found in ${projectRoot}.</div>`;
+                    }
                 }
 
-                statusEl.textContent = 'Writing files...';
-                await fs.writeFile(`${appDir}/index.html`, files.html);
-                await fs.writeFile(`${appDir}/styles.css`, files.css);
-                await fs.writeFile(`${appDir}/app.js`, files.js);
+                if (finalSummary && finalSummary.summary) {
+                    statusEl.textContent = 'Completed';
+                    appendLog(`\n[SUMMARY]\n${finalSummary.summary}\n`, 'summary');
+                } else {
+                    statusEl.textContent = 'Completed';
+                }
 
-                statusEl.textContent = `Saved to ${appDir}`;
-                const srcdoc = this.buildPreviewSrcdoc(files.html, files.css, files.js);
-                frameEl.srcdoc = srcdoc;
-                lastGenerated = { slug, appDir, label: toTitle(slug) };
-                addBtn.disabled = false;
-
-                this.os.shell.print(`[AppBuilder] Wrote ${appDir}/index.html`, 'success');
-                this.os.shell.print(`[AppBuilder] Wrote ${appDir}/styles.css`, 'success');
-                this.os.shell.print(`[AppBuilder] Wrote ${appDir}/app.js`, 'success');
+                if (projectRoot.startsWith('/apps/')) {
+                    lastGenerated = { slug, appDir: projectRoot, label: toTitle(slug) };
+                    addBtn.disabled = false;
+                } else {
+                    lastGenerated = null;
+                    addBtn.disabled = true;
+                }
             } catch (e) {
                 statusEl.textContent = `Error: ${e.message}`;
                 this.os.shell.print(`[AppBuilder] ${e.message}`, 'error');
@@ -1073,8 +1217,26 @@ export class BrowserApp {
         viewport.innerHTML = `<div style="padding:20px; color:#666">Connecting to ${url}...</div>`;
         
         try {
+            let target = (url || '').trim();
+            if (!target) {
+                viewport.innerHTML = `<div style="padding:20px; color:red">Missing URL</div>`;
+                return;
+            }
+            if (!target.startsWith('http') && !target.startsWith('/') && !target.startsWith('localhost')) {
+                target = '/' + target;
+                if (input) input.value = target;
+            }
+            if (target.startsWith('/')) {
+                const iframe = document.createElement('iframe');
+                iframe.style.cssText = "width:100%; height:100%; border:none;";
+                viewport.innerHTML = '';
+                viewport.appendChild(iframe);
+                this.currentFrame = iframe;
+                iframe.src = target;
+                return;
+            }
             // 1. Fetch Root HTML
-            const response = await this.os.fetch(url);
+            const response = await this.os.fetch(target);
             
             if (response.statusCode !== 200) {
                 viewport.innerHTML = `<div style="padding:20px; color:red">HTTP ${response.statusCode}: ${response.body}</div>`;
@@ -1093,7 +1255,7 @@ export class BrowserApp {
             for (const link of links) {
                 const href = link.getAttribute('href');
                 if (href && !href.startsWith('http')) {
-                    const absUrl = this.resolveUrl(url, href);
+                    const absUrl = this.resolveUrl(target, href);
                     try {
                         const res = await this.os.fetch(absUrl);
                         if(res.statusCode === 200) {
@@ -1111,7 +1273,7 @@ export class BrowserApp {
             for (const script of scripts) {
                 const src = script.getAttribute('src');
                 if (src && !src.startsWith('http')) {
-                    const absUrl = this.resolveUrl(url, src);
+                    const absUrl = this.resolveUrl(target, src);
                     try {
                         const res = await this.os.fetch(absUrl);
                         if(res.statusCode === 200) {
@@ -1129,7 +1291,7 @@ export class BrowserApp {
             for (const img of images) {
                 const src = img.getAttribute('src');
                 if (src && !src.startsWith('http') && !src.startsWith('data:')) {
-                    const absUrl = this.resolveUrl(url, src);
+                    const absUrl = this.resolveUrl(target, src);
                     try {
                         const res = await this.os.fetch(absUrl);
                         if(res.statusCode === 200) {
@@ -1168,11 +1330,278 @@ export class BrowserApp {
     }
 
     resolveUrl(baseUrl, relativePath) {
+        if (baseUrl.startsWith('/')) {
+            const baseDir = baseUrl.endsWith('/') ? baseUrl : baseUrl.slice(0, baseUrl.lastIndexOf('/') + 1);
+            const cleanRel = relativePath.replace(/^[\.\/]+/, '');
+            return baseDir + cleanRel;
+        }
         const match = baseUrl.match(/(localhost:\d+)/);
         if(!match) return relativePath;
         const origin = match[1];
         const cleanPath = relativePath.replace(/^[\.\/]+/, '');
         return `${origin}/${cleanPath}`;
+    }
+}
+
+class TerminalEmulator {
+    constructor(container, cols = 80, rows = 24) {
+        this.cols = cols;
+        this.rows = rows;
+        this.cursorRow = 0;
+        this.cursorCol = 0;
+        this.savedCursor = { row: 0, col: 0 };
+        this.escMode = false;
+        this.escBuffer = '';
+        this.buffer = Array.from({ length: rows }, () => Array(cols).fill(' '));
+        this.mainBuffer = this.buffer;
+        this.altBuffer = Array.from({ length: rows }, () => Array(cols).fill(' '));
+        this.inAltScreen = false;
+
+        this.pre = document.createElement('pre');
+        this.pre.style.cssText = [
+            'margin:0',
+            'padding:10px',
+            'font-family:"IBM Plex Mono", "Courier New", monospace',
+            'font-size:13px',
+            'line-height:1.4',
+            'color:#e5e5e5',
+            'white-space:pre',
+            'user-select:text'
+        ].join(';');
+        container.appendChild(this.pre);
+        this.render();
+    }
+
+    clearScreen() {
+        this.buffer = Array.from({ length: this.rows }, () => Array(this.cols).fill(' '));
+        this.cursorRow = 0;
+        this.cursorCol = 0;
+        if (this.inAltScreen) {
+            this.altBuffer = this.buffer;
+        } else {
+            this.mainBuffer = this.buffer;
+        }
+    }
+
+    clearLine() {
+        this.buffer[this.cursorRow].fill(' ', this.cursorCol);
+    }
+
+    scroll() {
+        this.buffer.shift();
+        this.buffer.push(Array(this.cols).fill(' '));
+        this.cursorRow = this.rows - 1;
+    }
+
+    moveCursor(row, col) {
+        this.cursorRow = Math.max(0, Math.min(this.rows - 1, row));
+        this.cursorCol = Math.max(0, Math.min(this.cols - 1, col));
+    }
+
+    handleCSI(seq) {
+        const finalChar = seq.slice(-1);
+        let params = seq.slice(0, -1);
+        const isPrivate = params.startsWith('?');
+        if (isPrivate) params = params.slice(1);
+        params = params.split(';').filter(p => p !== '').map(p => parseInt(p, 10));
+
+        const n = (idx, def) => (params[idx] || params[idx] === 0) ? params[idx] : def;
+
+        if (isPrivate && finalChar === 'h') {
+            const mode = n(0, 0);
+            if (mode === 1049 || mode === 47 || mode === 1047) {
+                this.savedCursor = { row: this.cursorRow, col: this.cursorCol };
+                this.inAltScreen = true;
+                this.buffer = this.altBuffer;
+                this.clearScreen();
+                this.render();
+            }
+            return;
+        }
+
+        if (isPrivate && finalChar === 'l') {
+            const mode = n(0, 0);
+            if (mode === 1049 || mode === 47 || mode === 1047) {
+                this.inAltScreen = false;
+                this.buffer = this.mainBuffer;
+                this.cursorRow = this.savedCursor.row;
+                this.cursorCol = this.savedCursor.col;
+                this.render();
+            }
+            return;
+        }
+
+        switch (finalChar) {
+            case 'A': // cursor up
+                this.moveCursor(this.cursorRow - n(0, 1), this.cursorCol);
+                break;
+            case 'B': // cursor down
+                this.moveCursor(this.cursorRow + n(0, 1), this.cursorCol);
+                break;
+            case 'C': // cursor right
+                this.moveCursor(this.cursorRow, this.cursorCol + n(0, 1));
+                break;
+            case 'D': // cursor left
+                this.moveCursor(this.cursorRow, this.cursorCol - n(0, 1));
+                break;
+            case 'H':
+            case 'f': {
+                const row = n(0, 1) - 1;
+                const col = n(1, 1) - 1;
+                this.moveCursor(row, col);
+                break;
+            }
+            case 'J': { // clear screen
+                const mode = n(0, 0);
+                if (mode === 2 || mode === 3) {
+                    this.clearScreen();
+                } else if (mode === 0) {
+                    for (let r = this.cursorRow; r < this.rows; r++) {
+                        const start = (r === this.cursorRow) ? this.cursorCol : 0;
+                        this.buffer[r].fill(' ', start);
+                    }
+                }
+                break;
+            }
+            case 'K': // clear line
+                this.clearLine();
+                break;
+            case 'm': // colors ignored
+            default:
+                break;
+        }
+    }
+
+    write(data) {
+        const text = String(data);
+        for (let i = 0; i < text.length; i++) {
+            const ch = text[i];
+            if (this.escMode) {
+                this.escBuffer += ch;
+                if (this.escBuffer[0] === '[') {
+                    const code = this.escBuffer[this.escBuffer.length - 1];
+                    if (code >= '@' && code <= '~') {
+                        this.handleCSI(this.escBuffer);
+                        this.escBuffer = '';
+                        this.escMode = false;
+                    }
+                } else {
+                    if (this.escBuffer === 'c') {
+                        this.clearScreen();
+                        this.render();
+                    }
+                    this.escMode = false;
+                    this.escBuffer = '';
+                }
+                continue;
+            }
+
+            if (ch === '\x1b') {
+                this.escMode = true;
+                this.escBuffer = '';
+                continue;
+            }
+
+            if (ch === '\n') {
+                this.cursorRow += 1;
+                this.cursorCol = 0;
+                if (this.cursorRow >= this.rows) this.scroll();
+                continue;
+            }
+            if (ch === '\r') {
+                this.cursorCol = 0;
+                continue;
+            }
+            if (ch === '\b') {
+                this.cursorCol = Math.max(0, this.cursorCol - 1);
+                continue;
+            }
+
+            this.buffer[this.cursorRow][this.cursorCol] = ch;
+            this.cursorCol += 1;
+            if (this.cursorCol >= this.cols) {
+                this.cursorCol = 0;
+                this.cursorRow += 1;
+                if (this.cursorRow >= this.rows) this.scroll();
+            }
+        }
+        this.render();
+    }
+
+    render() {
+        const lines = this.buffer.map(row => row.join(''));
+        this.pre.textContent = lines.join('\n');
+    }
+}
+
+export class TerminalApp {
+    constructor(os) {
+        this.os = os;
+        this.win = null;
+        this.pid = null;
+        this.term = null;
+    }
+
+    open(pid) {
+        this.pid = pid || null;
+        const container = document.createElement('div');
+        container.style.cssText = 'display:flex; flex-direction:column; height:100%; background:#0b0b0b;';
+        container.tabIndex = 0;
+
+        const output = document.createElement('div');
+        output.style.cssText = 'flex:1; overflow:hidden;';
+        container.appendChild(output);
+
+        this.term = new TerminalEmulator(output, 100, 30);
+
+        container.addEventListener('click', () => container.focus());
+        container.addEventListener('keydown', (e) => {
+            if (!this.pid) return;
+            const seq = this.translateKey(e);
+            if (seq) {
+                e.preventDefault();
+                this.os.sendTtyInput(this.pid, seq);
+            }
+        });
+
+        this.byteCount = 0;
+        this.win = this.os.wm.createWindow(`Terminal ${pid ? `(${pid})` : ''}`, container, { width: 720, height: 460 });
+        this.win.querySelector('.btn-close').addEventListener('click', () => this.detach());
+
+        if (this.pid) this.attach(this.pid);
+        setTimeout(() => container.focus(), 50);
+    }
+
+    attach(pid) {
+        this.pid = pid;
+        this.os.attachTty(pid, (payload) => {
+            const data = payload && payload.data ? payload.data : '';
+            this.byteCount += data.length;
+            const title = this.win.querySelector('.window-title');
+            if (title) title.textContent = `Terminal (${pid}) [${this.byteCount} bytes]`;
+            this.term.write(data);
+        });
+    }
+
+    detach() {
+        if (this.pid && this.os.ttyAttachedPid === this.pid) {
+            this.os.detachTty();
+        }
+        this.pid = null;
+    }
+
+    translateKey(e) {
+        if (e.ctrlKey && e.key === 'c') return '\x03';
+        if (e.key === 'Enter') return '\r';
+        if (e.key === 'Backspace') return '\x7f';
+        if (e.key === 'Tab') return '\t';
+        if (e.key === 'Escape') return '\x1b';
+        if (e.key === 'ArrowUp') return '\x1b[A';
+        if (e.key === 'ArrowDown') return '\x1b[B';
+        if (e.key === 'ArrowRight') return '\x1b[C';
+        if (e.key === 'ArrowLeft') return '\x1b[D';
+        if (e.key && e.key.length === 1 && !e.metaKey && !e.ctrlKey) return e.key;
+        return '';
     }
 }
 
@@ -1268,7 +1697,7 @@ export class LauncherApp {
                 addIfMissing({ id: 'browser', label: 'Browser', type: 'app', command: 'browser', icon: '🌐' });
                 addIfMissing({ id: 'files', label: 'Files', type: 'app', command: 'files', icon: '📁' });
                 addIfMissing({ id: 'link', label: 'Tools Menu', type: 'url', url: 'https://tools.mhn.lol', icon: '🔗' });
-                addIfMissing({ id: 'appbuilder', label: 'App Builder', type: 'app', command: 'appbuilder', icon: '🧪' });
+                addIfMissing({ id: 'appbuilder', label: 'Coding Agent', type: 'app', command: 'appbuilder', icon: '🧪' });
                 addIfMissing({ id: 'wget-md', label: 'wget-url.md', type: 'markdown', path: '/demos/utils/wget-url.md', icon: '📝' });
                 addIfMissing({ id: 'readme-md', label: 'README', type: 'markdown', path: '/demos/utils/README.md', icon: '📘' });
                 config.items = items;
@@ -1287,7 +1716,7 @@ export class LauncherApp {
                 { id: 'browser', label: 'Browser', type: 'app', command: 'browser', icon: '🌐' },
                 { id: 'files', label: 'Files', type: 'app', command: 'files', icon: '📁' },
                 { id: 'link', label: 'Tools Menu', type: 'url', url: 'https://tools.mhn.lol', icon: '🔗' },
-                { id: 'appbuilder', label: 'App Builder', type: 'app', command: 'appbuilder', icon: '🧪' },
+                { id: 'appbuilder', label: 'Coding Agent', type: 'app', command: 'appbuilder', icon: '🧪' },
                 { id: 'wget-md', label: 'wget-url.md', type: 'markdown', path: '/demos/utils/wget-url.md', icon: '📝' },
                 { id: 'readme-md', label: 'README', type: 'markdown', path: '/demos/utils/README.md', icon: '📘' }
             ]

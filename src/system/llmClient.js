@@ -43,12 +43,16 @@ export async function streamChat({
   const decoder = new TextDecoder();
 
   let buffer = "";
+  let sawDelta = false;
+  let rawAll = "";
 
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
 
-    buffer += decoder.decode(value, { stream: true });
+    const chunk = decoder.decode(value, { stream: true });
+    rawAll += chunk;
+    buffer += chunk;
 
     const lines = buffer.split("\n");
     buffer = lines.pop();
@@ -63,8 +67,23 @@ export async function streamChat({
       try {
         const json = JSON.parse(line.slice(6));
         const delta = json.choices?.[0]?.delta?.content;
-        if (delta) onDelta(delta);
+        if (delta) {
+          sawDelta = true;
+          onDelta(delta);
+        }
       } catch {}
     }
+  }
+
+  if (!sawDelta && rawAll.trim()) {
+    try {
+      const json = JSON.parse(rawAll);
+      const content =
+        json.choices?.[0]?.message?.content ??
+        json.choices?.[0]?.text ??
+        "";
+      if (content) onDelta(content);
+      onDone?.();
+    } catch {}
   }
 }

@@ -1,6 +1,6 @@
 import * as fs from '../kernel/fs.js';
 import { runBackupCommand } from './backup.js';
-import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp, AppBuilder } from './apps.js';
+import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp, AppBuilder, TerminalApp } from './apps.js';
 import { PackageManager } from './npm.js';
 
 export class Shell {
@@ -34,6 +34,8 @@ export class Shell {
                 this.print("  edit <file>          - open editor", 'system');
                 this.print("  md <file>            - open markdown preview", 'system');
                 this.print("  run <file>           - run a JS process", 'system');
+                this.print("  oapp <path>          - launch an oapp", 'system');
+                this.print("  oapp build [path]    - scaffold Vite-style oapp", 'system');
                 this.print("  npm install <pkg>    - install npm package", 'system');
                 this.print("  upload [folder|-r]   - upload files or folder", 'system');
                 this.print("  gitclone <url> [dir] - clone a repo", 'system');
@@ -43,6 +45,9 @@ export class Shell {
                 this.print("  ps                   - list processes", 'system');
                 this.print("  kill <pid>           - kill a process", 'system');
                 this.print("  backup               - encrypted backup/restore", 'system');
+                this.print("  net [status|mode|proxy] - network mode/proxy settings", 'system');
+                this.print("  tty [attach|detach|status] - attach shell to a process", 'system');
+                this.print("  term <pid>            - open terminal window for a process", 'system');
             },
             'clear': () => this.output.innerHTML = '',
             'cls': () => this.output.innerHTML = '',
@@ -192,82 +197,107 @@ export class Shell {
                 else this.print("File not found.", 'error');
             },
 		
-            // --- launching oapps --- 		
-			'oapp': async (args) => {
-  const folder = (args && args[0]) ? args[0] : '';
-  if (!folder) {
-    this.print('Usage: oapp /apps/<name>', 'error');
-    return;
-  }
+            // --- launching oapps ---
+            'oapp': async (args) => {
+                const sub = (args && args[0]) ? args[0] : '';
+                if (sub === 'build') {
+                    const target = (args && args[1]) ? args[1] : this.cwd;
+                    const base = this.resolvePath(target).replace(/\/+$/, '');
+                    const name = base.split('/').filter(Boolean).pop() || 'app';
+                    await fs.createDir(base);
+                    await fs.createDir(`${base}/src`);
 
-  const base = folder.endsWith('/') ? folder.slice(0, -1) : folder;
+                    const indexHtml = `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>${name}</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/${base.replace(/^\/+/, '')}/src/main.tsx"></script>
+  </body>
+</html>
+`;
+                    const mainTsx = `import React from "react";
+import { createRoot } from "react-dom/client";
+import App from "./App";
+import "./styles.css";
 
-  const htmlRes = await fs.readFile(`${base}/index.html`, true);
-  const cssRes  = await fs.readFile(`${base}/styles.css`, true);
-  const jsRes   = await fs.readFile(`${base}/app.js`, true);
+const root = createRoot(document.getElementById("root"));
+root.render(<App />);
+`;
+                    const appTsx = `export default function App() {
+  return (
+    <div style={{ padding: 24, fontFamily: "system-ui, sans-serif" }}>
+      <h1>${name}</h1>
+      <p>Edit src/App.tsx to get started.</p>
+    </div>
+  );
+}
+`;
+                    await fs.writeFile(`${base}/index.html`, indexHtml);
+                    await fs.writeFile(`${base}/src/main.tsx`, mainTsx);
+                    await fs.writeFile(`${base}/src/App.tsx`, appTsx);
+                    await fs.writeFile(`${base}/src/styles.css`, '');
 
-  if (!htmlRes.success) { this.print(`Missing: ${base}/index.html`, 'error'); return; }
-  if (!cssRes.success)  { this.print(`Missing: ${base}/styles.css`, 'error'); return; }
-  if (!jsRes.success)   { this.print(`Missing: ${base}/app.js`, 'error'); return; }
+                    this.print(`[oapp] Vite-style app scaffolded at ${base}`, 'success');
+                    this.print(`[oapp] Run: oapp ${base}`, 'accent');
+                    return;
+                }
 
-  const html = htmlRes.data || '';
-  const css  = cssRes.data || '';
-  const js   = jsRes.data || '';
+                const folder = sub;
+                if (!folder) {
+                    this.print('Usage: oapp <path> | oapp build [path]', 'error');
+                    return;
+                }
 
-  // Build srcdoc: inline css + js so it runs with no server
-  const srcdoc = buildSrcdoc(html, css, js);
+                const base = this.resolvePath(folder).replace(/\/+$/, '');
 
-  const viewport = document.createElement('div');
-  viewport.style.cssText = 'width:100%; height:100%; background:#111;';
+                const htmlRes = await fs.readFile(`${base}/index.html`, true);
+                if (!htmlRes.success) {
+                    this.print(`Missing: ${base}/index.html`, 'error');
+                    return;
+                }
 
-  const iframe = document.createElement('iframe');
-  iframe.style.cssText = 'width:100%; height:100%; border:none; background:#fff;';
-  iframe.srcdoc = srcdoc;
+                if (navigator.serviceWorker && navigator.serviceWorker.ready) {
+                    try { await navigator.serviceWorker.ready; } catch {}
+                }
+                if (!navigator.serviceWorker || !navigator.serviceWorker.controller) {
+                    this.print('[oapp] Service worker not controlling this page. Reload the OS once and try again.', 'error');
+                    return;
+                }
 
-  viewport.appendChild(iframe);
+                const viewport = document.createElement('div');
+                viewport.style.cssText = 'width:100%; height:100%; background:#111;';
 
-  this.os.wm.createWindow(`oapp: ${base}`, viewport, { width: 900, height: 650 });
-  this.print(`[oapp] Launched ${base}`, 'success');
+                const iframe = document.createElement('iframe');
+                iframe.style.cssText = 'width:100%; height:100%; border:none; background:#fff;';
+                iframe.src = `${base}/index.html`;
 
-  function buildSrcdoc(indexHtml, cssText, jsText) {
-    let out = indexHtml;
+                viewport.appendChild(iframe);
 
-    // swap external file refs if present
-    out = out.replace(
-      /<link[^>]*rel=["']stylesheet["'][^>]*href=["']styles\.css["'][^>]*>/i,
-      `<style>\n${cssText}\n</style>`
-    );
-    out = out.replace(
-      /<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i,
-      `<script>\n${jsText}\n<\/script>`
-    );
-
-    // if they forgot those tags, inject
-    if (!/<style[\s>]/i.test(out)) {
-      out = out.replace(/<\/head>/i, `<style>\n${cssText}\n</style>\n</head>`);
-    }
-    if (!/<script[\s>]/i.test(out)) {
-      out = out.replace(/<\/body>/i, `<script>\n${jsText}\n<\/script>\n</body>`);
-    }
-
-    return out;
-  }
-},
+                this.os.wm.createWindow(`oapp: ${base}`, viewport, { width: 900, height: 650 });
+                this.print(`[oapp] Launched ${base}`, 'success');
+            },
 
 
             // --- NPM COMMAND (Delegates to PackageManager) ---
             'npm': async (args) => {
-                const [action, pkg] = args;
+                const [action, ...rest] = args;
                 if (action === 'install') {
-                    if (!pkg || pkg === 'package.json') {
-                        const path = this.resolvePath(pkg || 'package.json');
+                    const isGlobal = rest.includes('-g') || rest.includes('--global');
+                    const pkgArg = rest.find(arg => !arg.startsWith('-'));
+                    if (!pkgArg || pkgArg === 'package.json') {
+                        const path = this.resolvePath(pkgArg || 'package.json');
                         await this.npm.installFromPackageJson(path);
                     } else {
-                        await this.npm.install(pkg);
+                        await this.npm.install(pkgArg, { global: isGlobal });
                     }
                     return;
                 }
-                this.print("Usage: npm install <package|package.json>", 'error');
+                this.print("Usage: npm install <package|package.json> [-g|--global]", 'error');
             },
             
             'wget': async (args) => {
@@ -287,10 +317,12 @@ export class Shell {
     this.print(`Downloading ${url}...`, 'system');
     
     try {
-        const res = await fetch(url);
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const res = await this.os.fetch(url, { responseType: 'arraybuffer' });
+        if (res.statusCode !== 200) throw new Error(`HTTP ${res.statusCode}`);
         
-        const buffer = await res.arrayBuffer();
+        const buffer = res.body instanceof ArrayBuffer
+            ? res.body
+            : new TextEncoder().encode(String(res.body || '')).buffer;
         const result = await fs.writeFile(fullPath, buffer);
         
         if (result.success) {
@@ -400,6 +432,72 @@ export class Shell {
                 if (!pid) return this.print("Usage: kill <pid>", 'error');
                 if (this.os.procs.has(pid)) this.os.kill(pid);
                 else this.print(`PID ${pid} not found.`, 'error');
+            },
+
+            'tty': (args) => {
+                const sub = (args[0] || 'status').toLowerCase();
+                if (sub === 'status') {
+                    if (this.os.ttyAttachedPid) {
+                        this.print(`[TTY] Attached to PID ${this.os.ttyAttachedPid}`, 'system');
+                    } else {
+                        this.print('[TTY] Not attached', 'system');
+                    }
+                    return;
+                }
+                if (sub === 'attach') {
+                    const pid = parseInt(args[1]);
+                    if (!pid) return this.print("Usage: tty attach <pid>", 'error');
+                    if (!this.os.procs.has(pid)) return this.print(`PID ${pid} not found.`, 'error');
+                    this.os.attachTty(pid, (payload) => {
+                        this.print(`[${pid}] ${payload.data}`, payload.stream === 'stderr' ? 'error' : '');
+                    });
+                    this.print(`[TTY] Attached to PID ${pid}. Ctrl+C to detach.`, 'success');
+                    return;
+                }
+                if (sub === 'detach') {
+                    this.os.detachTty();
+                    this.print('[TTY] Detached', 'system');
+                    return;
+                }
+                this.print("Usage: tty [attach|detach|status]", 'error');
+            },
+
+            'term': (args) => {
+                const pid = parseInt(args[0]);
+                if (!pid) return this.print("Usage: term <pid>", 'error');
+                if (!this.os.procs.has(pid)) return this.print(`PID ${pid} not found.`, 'error');
+                new TerminalApp(this.os).open(pid);
+            },
+
+            'net': (args) => {
+                const sub = (args[0] || 'status').toLowerCase();
+                if (sub === 'status') {
+                    const status = this.os.getNetStatus();
+                    const stateMap = { 0: 'connecting', 1: 'open', 2: 'closing', 3: 'closed' };
+                    const proxyState = status.proxyState === null ? 'none' : (stateMap[status.proxyState] || 'unknown');
+                    this.print(`[NET] Mode: ${status.mode}`, 'system');
+                    this.print(`[NET] Proxy: ${status.proxyUrl || '(unset)'} (${proxyState})`, 'system');
+                    if (status.lastError) this.print(`[NET] Last error: ${status.lastError}`, 'error');
+                    return;
+                }
+                if (sub === 'mode') {
+                    const mode = (args[1] || '').toLowerCase();
+                    if (!['direct', 'proxy', 'worker'].includes(mode)) {
+                        this.print("Usage: net mode <direct|proxy|worker>", 'error');
+                        return;
+                    }
+                    this.os.setNetMode(mode);
+                    this.print(`[NET] Mode set to ${mode}`, 'success');
+                    return;
+                }
+                if (sub === 'proxy') {
+                    const url = args[1];
+                    if (!url) return this.print("Usage: net proxy <ws-url>", 'error');
+                    this.os.setProxyUrl(url);
+                    this.print(`[NET] Proxy URL set to ${url}`, 'success');
+                    return;
+                }
+                this.print("Usage: net [status|mode|proxy]", 'error');
             }
         };
 
@@ -434,6 +532,14 @@ export class Shell {
         this.input.addEventListener('keydown', (e) => {
             if (e.key === 'c' && e.ctrlKey) {
                 e.preventDefault();
+                if (this.os.ttyAttachedPid) {
+                    const pid = this.os.ttyAttachedPid;
+                    this.os.sendTtyInput(pid, '\u0003');
+                    this.os.detachTty();
+                    this.print(`[TTY] Detached from PID ${pid}`, 'system');
+                    this.input.value = '';
+                    return;
+                }
                 if (this.os.procs.size > 0) {
                     const lastPid = [...this.os.procs.keys()].pop();
                     this.os.kill(lastPid);
@@ -443,6 +549,12 @@ export class Shell {
             }
             if (e.key === 'Enter') {
                 const val = this.input.value.trim();
+                if (this.os.ttyAttachedPid) {
+                    const pid = this.os.ttyAttachedPid;
+                    this.os.sendTtyInput(pid, val + '\n');
+                    this.input.value = '';
+                    return;
+                }
                 if (val) {
                     this.history.push(val);
                     this.historyIndex = this.history.length;
@@ -532,21 +644,21 @@ export class Shell {
         this.print(`[gitclone] Fetching ${owner}/${repo}...`, 'system');
 
         if (!branch) {
-            const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`);
-            if (!repoRes.ok) {
-                this.print(`[gitclone] Repo not found (HTTP ${repoRes.status}).`, 'error');
+            const repoRes = await this.os.fetch(`https://api.github.com/repos/${owner}/${repo}`, { responseType: 'text' });
+            if (repoRes.statusCode !== 200) {
+                this.print(`[gitclone] Repo not found (HTTP ${repoRes.statusCode}).`, 'error');
                 return;
             }
-            const repoData = await repoRes.json();
+            const repoData = JSON.parse(repoRes.body || '{}');
             branch = repoData.default_branch || 'main';
         }
 
-        const treeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`);
-        if (!treeRes.ok) {
-            this.print(`[gitclone] Unable to fetch repo tree (HTTP ${treeRes.status}).`, 'error');
+        const treeRes = await this.os.fetch(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`, { responseType: 'text' });
+        if (treeRes.statusCode !== 200) {
+            this.print(`[gitclone] Unable to fetch repo tree (HTTP ${treeRes.statusCode}).`, 'error');
             return;
         }
-        const treeData = await treeRes.json();
+        const treeData = JSON.parse(treeRes.body || '{}');
         if (!Array.isArray(treeData.tree)) {
             this.print(`[gitclone] Invalid tree data.`, 'error');
             return;
@@ -575,12 +687,14 @@ export class Shell {
             const encodedPath = entry.path.split('/').map(encodeURIComponent).join('/');
             const fileUrl = `https://raw.githubusercontent.com/${owner}/${repo}/${encodedBranch}/${encodedPath}`;
             try {
-                const fileRes = await fetch(fileUrl);
-                if (!fileRes.ok) {
+                const fileRes = await this.os.fetch(fileUrl, { responseType: 'arraybuffer' });
+                if (fileRes.statusCode !== 200) {
                     failed += 1;
                     continue;
                 }
-                const buffer = await fileRes.arrayBuffer();
+                const buffer = fileRes.body instanceof ArrayBuffer
+                    ? fileRes.body
+                    : new TextEncoder().encode(String(fileRes.body || '')).buffer;
                 const writeRes = await fs.writeFile(`${targetDir}/${entry.path}`, buffer);
                 if (writeRes.success) saved += 1;
                 else failed += 1;

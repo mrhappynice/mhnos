@@ -10,9 +10,9 @@ export async function runAgent({
     {
       role: "system",
       content:
-        "You generate small HTML/CSS/JS site apps. " +
-        "You may only create index.html, styles.css, and app.js. " +
-        "Use CDN libraries only."
+        "You generate Vite-style React apps. " +
+        "You may only create index.html, src/main.tsx, src/App.tsx, and src/styles.css. " +
+        "Use CDN libraries only if explicitly needed."
     },
     { role: "user", content: prompt }
   ];
@@ -31,6 +31,7 @@ export async function runAgent({
   const files = extractFiles(output);
 
   await fs.mkdir(appDir);
+  await fs.mkdir(`${appDir}/src`);
 
   for (const [name, content] of Object.entries(files)) {
     await fs.writeFile(`${appDir}/${name}`, content);
@@ -41,7 +42,7 @@ export async function runAgent({
 
 function extractFiles(text) {
   const files = {};
-  const regex = /```(html|css|js)\n([\s\S]*?)```/g;
+  const regex = /```(html|css|tsx)\n([\s\S]*?)```/g;
 
   let match;
   while ((match = regex.exec(text))) {
@@ -51,10 +52,15 @@ function extractFiles(text) {
       ext === "html"
         ? "index.html"
         : ext === "css"
-        ? "styles.css"
-        : "app.js";
+        ? "src/styles.css"
+        : "tsx";
 
-    files[name] = body;
+    if (name === "tsx") {
+      files["src/main.tsx"] = files["src/main.tsx"] || body;
+      if (files["src/main.tsx"] !== body) files["src/App.tsx"] = body;
+    } else {
+      files[name] = body;
+    }
   }
 
   return files;
