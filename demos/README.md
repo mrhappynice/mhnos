@@ -25,9 +25,7 @@ Common commands:
 - `browser` - open the internal browser app
 - `files` - open the file explorer
 - `launcher` - open the launcher
-- `gitclone` - download github repo   
-  example - downloads the repo to the directory:  
-  `gitclone https://github.com/mrhappynice/lifeman.git lifeman`
+- `gitclone` - download github repo
 - `backup` - manage encrypted backups (local zip or S3-compatible)
 - `appbuilder` - create your own apps, local and api models
 - `oapp` - launcher your app creations 
@@ -150,10 +148,10 @@ Example entry:
 { "id": "docs", "label": "Docs", "type": "markdown", "path": "/docs/readme.md", "icon": "📘" }
 ```
 
-### Default entries and Lifeman link
+### Default entries and reindexing
 
-A seed file ships at `/system/launcher.json` on first boot. It includes the Life Manager link.
-When you click `Reindex` the first time, the launcher auto-populates any missing default entries (including the Life Manager card) into your config.
+A seed file ships at `/system/launcher.json` on first boot.
+When you click `Reindex` the first time, the launcher auto-populates any missing default entries into your config.
 
 ## Markdown preview in Nano
 

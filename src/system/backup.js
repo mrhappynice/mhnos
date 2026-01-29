@@ -213,6 +213,42 @@ function pickZipFile() {
     });
 }
 
+function normalizePath(path) {
+    const parts = String(path || '').split('/').filter(Boolean);
+    const stack = [];
+    for (const part of parts) {
+        if (part === '.') continue;
+        if (part === '..') stack.pop();
+        else stack.push(part);
+    }
+    return '/' + stack.join('/');
+}
+
+async function collectFiles(fs, root) {
+    const base = normalizePath(root || '/');
+    const basePrefix = base === '/' ? '/' : base + '/';
+    const files = [];
+
+    const walk = async (dir) => {
+        const res = await fs.listFiles(dir);
+        if (!res || !res.success || !Array.isArray(res.data)) return;
+        for (const entry of res.data) {
+            const full = dir === '/' ? `/${entry.name}` : `${dir}/${entry.name}`;
+            if (entry.type === 'directory') {
+                await walk(full);
+            } else {
+                const rel = base === '/'
+                    ? full.replace(/^\/+/, '')
+                    : full.startsWith(basePrefix) ? full.slice(basePrefix.length) : full.replace(/^\/+/, '');
+                files.push({ full, rel });
+            }
+        }
+    };
+
+    await walk(base);
+    return { base, files };
+}
+
 export async function runBackupCommand(shell, args) {
     const sub = args[0];
     if (!sub || sub === 'help') {
@@ -225,6 +261,7 @@ export async function runBackupCommand(shell, args) {
         shell.print("backup list        - list files from remote manifest", 'system');
         shell.print("backup local push  - export encrypted zip to device", 'system');
         shell.print("backup local pull  - restore from encrypted zip", 'system');
+        shell.print("backup local export [path] - export plain zip to device", 'system');
         return;
     }
 
@@ -340,8 +377,8 @@ export async function runBackupCommand(shell, args) {
 
     if (sub === 'local') {
         const action = args[1];
-        if (!action || (action !== 'push' && action !== 'pull')) {
-            shell.print("Usage: backup local <push|pull>", 'error');
+        if (!action || (action !== 'push' && action !== 'pull' && action !== 'export')) {
+            shell.print("Usage: backup local <push|pull|export> [path]", 'error');
             return;
         }
 
@@ -443,6 +480,34 @@ export async function runBackupCommand(shell, args) {
                 else shell.print(`Failed to write ${entry.path}: ${res.error}`, 'error');
             }
             shell.print('Local restore completed.', 'accent');
+            return;
+        }
+
+        if (action === 'export') {
+            const root = args[2] || '/';
+            const { files } = await collectFiles(fs, root);
+            if (!files.length) {
+                shell.print(`No files found under ${root}`, 'error');
+                return;
+            }
+
+            const { zipSync } = await getFflate();
+            const entries = {};
+            for (const item of files) {
+                const res = await fs.readFile(item.full, false);
+                if (!res || !res.success) {
+                    shell.print(`Skipped: ${item.full}`, 'error');
+                    continue;
+                }
+                entries[item.rel] = new Uint8Array(res.data || []);
+                shell.print(`Packed: ${item.full}`, 'success');
+            }
+
+            const zipBytes = zipSync(entries, { level: 0 });
+            const safeName = String(root || 'opfs').replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'opfs';
+            const filename = `mhnos-export-${safeName}-${new Date().toISOString().replace(/[:.]/g, '-')}.zip`;
+            downloadBlob(new Blob([zipBytes], { type: 'application/zip' }), filename);
+            shell.print(`Local export saved: ${filename}`, 'accent');
             return;
         }
     }

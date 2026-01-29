@@ -20,28 +20,35 @@
       "label": "Tools Menu",
       "type": "url",
       "url": "https://tools.mhn.lol",
-      "icon": "🔗"
+      "icon": "⚒️"
     },
     {
-      "id": "life",
-      "label": "Life Manager",
+      "id": "codejournal",
+      "label": "Code Journal",
       "type": "url",
-      "url": "https://lifeman.mhn.lol",
-      "icon": "🧭"
+      "url": "https://cj.mhn.lol",
+      "icon": "📓"
+    },
+    {
+      "id": "packedit",
+      "label": "Packedit",
+      "type": "app",
+      "command": "packedit",
+      "icon": "🧩"
     },
     {
       "id": "wget-md",
       "label": "wget-url.md",
       "type": "markdown",
       "path": "/demos/utils/wget-url.md",
-      "icon": "📝"
+      "icon": "🪃"
     },
     {
       "id": "readme-md",
       "label": "README",
       "type": "markdown",
       "path": "/demos/utils/README.md",
-      "icon": "📘"
+      "icon": "📖"
     }
   ]
 }

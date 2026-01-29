@@ -2,10 +2,10 @@ npm install -g react
 
 npm install -g react-dom
 
-oapp build /apps/hello
+oapp init /apps/hello
 
 oapp /apps/hello
 
 oapp /apps/react-test
 
-
+codex resume 019c02d8-0ecd-7a91-b686-48c74c30349a
