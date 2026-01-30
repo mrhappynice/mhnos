@@ -14,5 +14,7 @@
   { "src": "demos/launcher.json", "dest": "/system/launcher.json" },
   { "src": "demos/README.md", "dest": "/demos/utils/README.md" },
   { "src": "mhnos-sw.js", "dest": "/mhnos-sw.js" },
-  { "src": "mhnos-vite-worker.js", "dest": "/mhnos-vite-worker.js" }
+  { "src": "mhnos-vite-worker.js", "dest": "/mhnos-vite-worker.js" },
+  { "src": "demos/install-react.cmds", "dest": "/install-react.cmds" },
+  { "src": "demos/donut.py", "dest": "/donut.py" }
 ]

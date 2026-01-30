@@ -1,0 +1,3 @@
+# install react and react-dom globally
+npm install -g react
+npm install -g react-dom

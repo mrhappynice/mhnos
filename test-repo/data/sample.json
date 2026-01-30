@@ -1,5 +1,0 @@
-{
-  "name": "Control Hub",
-  "modules": ["parse", "generate", "remote", "search", "write"],
-  "status": "ready"
-}

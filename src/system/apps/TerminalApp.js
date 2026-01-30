@@ -200,14 +200,37 @@ export class TerminalApp {
     open(pid) {
         this.pid = pid || null;
         const container = document.createElement('div');
-        container.style.cssText = 'display:flex; flex-direction:column; height:100%; background:#0b0b0b;';
+        container.style.cssText = [
+  'display:flex',
+  'flex-direction:column',
+  'height:100%',
+  'width:100%',
+  'min-height:0'          // important in nested flex layouts
+].join(';');
         container.tabIndex = 0;
 
         const output = document.createElement('div');
-        output.style.cssText = 'flex:1; overflow:hidden;';
+        output.style.cssText = [
+  'flex:1',
+  'min-height:0',   
+  'overflow:auto'
+].join(';');
         container.appendChild(output);
 
-        this.term = new TerminalEmulator(output, 100, 30);
+        this.pre = document.createElement('pre');
+this.pre.style.cssText = [
+  'margin:0',
+  'padding:10px',
+  'font-family:"IBM Plex Mono", "Courier New", monospace',
+  'font-size:13px',
+  'line-height:1.4',
+  'color:#e5e5e5',
+  'white-space:pre-wrap',   // <- wraps like a log; use 'pre' if you want no wrapping
+  'user-select:text'
+].join(';');
+output.appendChild(this.pre);
+this.output = output;
+
 
         container.addEventListener('click', () => container.focus());
         container.addEventListener('keydown', (e) => {
@@ -234,7 +257,9 @@ export class TerminalApp {
             this.byteCount += data.length;
             const title = this.win.querySelector('.window-title');
             if (title) title.textContent = `Terminal (${pid}) [${this.byteCount} bytes]`;
-            this.term.write(data);
+            this.pre.textContent += data;
+            this.output.scrollTop = this.output.scrollHeight;
+
         });
     }
 

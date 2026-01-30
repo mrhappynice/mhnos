@@ -108,6 +108,41 @@ const OS = {
         worker.postMessage({ type: 'EXEC_CODE', payload: { code, path } });
         return pid;
     },
+    
+    // --- SPAWN PYTHON PROCESS ---
+spawnPython: async (code, path = "/process.py") => {
+    const pid = OS.pidCounter++;
+
+    // IMPORTANT: classic worker (no { type: "module" }) so python-worker can importScripts()
+    const worker = new Worker('./src/runtime/python-worker.js');
+
+    worker.onerror = (e) => {
+        OS.shell.print(`[KERNEL] Python Process ${pid} Crashed: ${e.message}`, 'error');
+        console.error(e);
+    };
+
+    OS.procs.set(pid, {
+        id: pid,
+        worker: worker,
+        startTime: Date.now(),
+        name: path,
+        ports: new Set(),
+        window: null,
+        ttyBuffer: [],
+        ttyBufferSize: 0
+    });
+
+    setupWorkerListeners(worker, pid);
+    audio.init();
+
+    // If your python-worker mounts OPFS via pyodide.mountNativeFS, you can skip syncing.
+    // If you decide NOT to mount OPFS, keep this:
+    // await syncFileSystem(worker);
+
+    worker.postMessage({ type: 'EXEC_PY', payload: { code, path } });
+    return pid;
+},
+
 
     kill: (pid) => {
         if (OS.procs.has(pid)) {

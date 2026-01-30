@@ -1,327 +1,266 @@
-# MHNOS Prototype
+# MHNOS Web OS
 
-This is a browser-based MHNOS prototype with a window manager, shell, OPFS-backed filesystem, and a launcher with instant search.
+## Welcome to **MHNOS** — an **isolated, in-browser dev environment** that feels like a tiny operating system:
 
-## Quick Start
+## TL;DR
 
-- Open the page and the Launcher will appear on load.
-- Use the shell at the bottom for commands.
-- Use the minimize dock on the right to restore minimized windows.
+MHNOS is a **mini dev OS in your browser**:
 
-## Shell Basics
+- persistent filesystem
+- shell + scripts
+- JS + Python processes
+- npm installs
+- app scaffolding + bundling
+- Packedit for build/serve/export
+- optional Rust WS proxy for real networking + TCP
 
-Common commands:
+It’s designed to be friendly and fun: you can learn by doing, without installing a giant toolchain first.
 
-- `help` - list commands
-- `ls` - list files
-- `cd <path>` - change directory
-- `mkdir <name>` - create directory
-- `rm <path>` - remove file/dir
-- `upload` - upload files from your computer
-- `cat <file>` - print file
-- `edit <file>` - open Nano editor
-- `md <file>` - open Markdown preview mode
-- `run <file>` - run a JS process
-- `browser` - open the internal browser app
-- `files` - open the file explorer
-- `launcher` - open the launcher
-- `gitclone` - download github repo
-- `backup` - manage encrypted backups (local zip or S3-compatible)
-- `appbuilder` - create your own apps, local and api models
-- `oapp` - launcher your app creations 
+## Why this exists
 
-## Filesystem (OPFS)
+Modern dev stacks are powerful, but they’re also heavy. MHNOS flips the script:
 
-The OS stores files in the browser's Origin Private File System (OPFS).
+- Your workspace lives in the browser (persisted in OPFS).
+- Your code runs in isolated workers (safer, cleaner, less “it broke my machine”).
+- You can build + bundle + export projects right here.
+- You can run Node-ish scripts (Express-style demos included).
+- You can run Python (Pyodide-based) and read/write files inside the same OS filesystem.
 
-Add files:
+## Mental model
 
-- **Upload Files**: Type `upload` to open the native file picker and select one or more files. They will be saved to your current directory.
-- **Upload Folders**: Type `upload folder` to select a directory. This preserves the folder structure and uploads all files inside.
-- **Create**: Use `edit /path/file.txt` to create or edit a file manually.
-- **Make Dirs**: Use `mkdir /path/folder` for new folders.
+### “Disk”
 
-Search files:
+Your “disk” is the browser’s **Origin Private File System (OPFS)**. It persists between refreshes.
 
-- Use the Launcher search input for instant lexical search across text files (code, md, json, txt, etc.).
-- Click any search result to open it in the editor.
+### “Processes”
 
-## Backup and Restore
+When you `run` code, MHNOS launches a **Worker process** and tracks it with a PID. The OS can list processes and attach a TTY.
 
-Backups are encrypted in the browser with AES-GCM and a passphrase you enter each time (the passphrase is never stored).
+### “Apps”
 
-### Configure remote (S3-compatible)
+Apps are windows. Some are utilities (Files, Browser, Launcher), some are dev tools (Packedit), and you can scaffold your own apps (oapp).
 
-```sh
-backup config set
-```
+## Getting around
 
-Then fill in:
+The shell prompt shows your current working directory:
 
-- endpoint (R2 or MinIO URL)
-- bucket
-- region (use `auto` for R2)
-- access key / secret
-- optional prefix
+user@mhnos:/somewhere$
 
-Show config:
+Basics:
 
-```sh
-backup config show
-```
+- `pwd` prints the working directory
 
-### Remote backup/restore
+- `ls` lists files
 
-```sh
-backup push
-backup list
-backup pull
-```
+- `cd` moves
 
-### Local zip backup/restore
+- `cat` prints a file
 
-```sh
-backup local push
-backup local pull
-```
+- `mkdir`, `rm`, `cp` do what you expect
 
-Notes:
+---
 
-- Local backups are stored as a `.zip` with no compression for speed.
-- Each file is encrypted and stored in the zip alongside a `backup.json` manifest.
+## Shell commands
 
-### CORS setup (browser access)
+Run `help` in MHNOS for the canonical list.
 
-Cloudflare R2 (JSON in dashboard):
+### Files + editing
 
-```json
-[
-  {
-    "AllowedOrigins": ["https://your-origin.example"],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
+- `edit <file>` — open the editor (quick edits + save)
 
-MinIO (JSON for `mc cors set` or console):
+- `md <file>` — open markdown preview
 
-```json
-[
-  {
-    "AllowedOrigins": ["https://your-origin.example"],
-    "AllowedMethods": ["GET", "PUT", "HEAD"],
-    "AllowedHeaders": ["*"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3600
-  }
-]
-```
+- `upload [folder|-r]` — upload files/folders into OPFS
 
-Notes:
+### Running code + processes
 
-- Use your exact app origin (including scheme + port).
-- R2 endpoint format: `https://<accountid>.r2.cloudflarestorage.com`
-- MinIO endpoint format: `https://<host>:<port>`
+- `run <file>` — run a JS process in a worker
 
-## Launcher
+- `ps` — list running processes
 
-The launcher supports quick-launch cards and instant search.
+- `kill <pid>` — kill a process
 
-Add entries:
+### TTY + Terminal windows
 
-- Edit `/system/launcher.json`.
-- Click `Reindex` in the launcher to reload and refresh cards.
+MHNOS supports attaching a “TTY” stream to a process and viewing it in a terminal window:
 
-Supported entry types:
+- `tty status`
 
-- `app`: run a shell command
-- `script`: run a JS file
-- `url`: open a real browser tab
-- `markdown`: open a file in Markdown preview mode
+- `tty attach <pid>`
 
-Example entry:
+- `tty detach`
 
-```json
-{ "id": "docs", "label": "Docs", "type": "markdown", "path": "/docs/readme.md", "icon": "📘" }
-```
+Open a full terminal UI:
 
-### Default entries and reindexing
+- `term <pid>`
 
-A seed file ships at `/system/launcher.json` on first boot.
-When you click `Reindex` the first time, the launcher auto-populates any missing default entries into your config.
+### Command scripts (.cmds)
 
-## Markdown preview in Nano
+You can execute a file full of shell commands:
 
-- Use `md /path/file.md` to open a file in preview mode.
-- Toggle preview while editing with the `^M Preview` button.
-- Code blocks include a Copy button.
+- `cmd <file>` — reads a file, strips comments/blank lines, and runs commands line-by-line
 
-## NPM and Express (inside the OS)
+Example included:
 
-Use the built-in package manager to install and run Express.
+- `demos/install-react.cmds` installs React + ReactDOM globally via `npm install -g ...`
 
-1) Create a project folder:
+### Python
+
+MHNOS can spawn Python processes:
+
+- `python <file.py>`
+
+- `python -c <code>`
+
+Under the hood:
+
+- Python runs in a dedicated worker using **Pyodide**
+
+- Loaded from `/vendor/pyodide/full/pyodide.js`
+
+- Index URL `/vendor/pyodide/full/`
+
+- OPFS is mounted at `/opfs`
+
+- The process `chdir`s to `/opfs` by default
+
+- Interactive input is supported via buffered TTY lines for `input()`
+
+### oapp: your “make an app” workflow
+
+`oapp` is the built-in app runner + scaffolder:
+
+- `oapp <path>` — launch an app
+
+- `oapp init [path]` — scaffold a Vite-style React app
+
+- `oapp build [path]` — bundle to `dist/`
+
+`oapp init` creates:
+
+- `index.html`
+
+- `src/main.tsx`
+
+- `src/App.tsx`
+
+- `src/styles.css`
+
+`oapp build`:
+
+- reads `index.html`
+
+- finds your entry module
+
+- bundles with esbuild
+
+- copies non-src assets into `dist/`
+
+- writes bundled assets into `dist/assets`
+
+### npm (package installs inside Web OS)
+
+MHNOS includes a PackageManager exposed through:
+
+- `npm install <package|package.json> [-g|--global]`
+
+Convenience helper:
+
+- `serverhere` — copies `/demos/site/server.js` into your cwd and installs express
+
+### Networking controls (direct vs proxy)
+
+Network modes:
+
+- `direct` — normal fetch when allowed
+
+- `proxy` — WebSocket proxy for fetch + raw TCP
+
+- `worker` — placeholder (not fully implemented)
+
+Shell controls:
+
+- `net status`
+
+- `net mode <direct|proxy|worker>`
+
+- `net proxy <ws-url>`
+
+**Important:** TCP requires proxy mode.
+
+---
+
+## Packedit (the “build/export” editor)
+
+**Packedit** is a project editor built into MHNOS — meant for “open a folder and ship something”.
+
+It includes:
+
+- project picker
+
+- file tree (skips `node_modules`, `dist`, `.git`, `.cache`)
+
+- editor pane
+
+- live preview iframe
+
+- action buttons: **Build**, **Serve**, **Zip dist**, **Save**
+
+If your goal is:
+
+- build a project
+
+- preview it
+
+- export a distributable (zip)
+
+Packedit is the “do it all from one window” path.
+
+---
+
+## Running servers inside MHNOS
+
+MHNOS can run “Node-ish” server scripts inside worker processes (demo uses Express).
+
+Quick path:
 
 ```sh
 mkdir /projects
 cd /projects
-```
-
-2) Install Express:
-
-```sh
-npm install express
-```
-
-3) Create a server file:
-
-```sh
-edit server.js
-```
-
-Example server:
-
-```js
-const express = require('express');
-const app = express();
-
-app.get('/', (req, res) => {
-  res.send('Hello from MHNOS');
-});
-
-app.listen(3000, () => {
-  console.log('Server listening on 3000');
-});
-```
-
-4) Run the server:
-
-```sh
+serverhere
 run server.js
 ```
 
-## Test Servers Demo Repo
-
-You can pull the two-server Control Hub demo via gitclone:
-
-```sh
-gitclone https://github.com/mrhappynice/mhnos-test-servers.git test-repo
-```
-
-Start the servers (two processes):
-
-```sh
-cd /test-repo
-npm install
-run servers/worker.js
-run servers/control.js
-```
-
-Open the UI:
-
-```sh
-browser
-```
-
-Then set the URL to:
-
-```
-localhost:3000
-```
-
-Notes:
-
-- The Control server hosts the UI (port 3000).
-- The Worker server exposes the JSON API (port 4000).
-- Actions on the UI trigger worker tasks like parse, generate, search, and remote fetch.
-
-### Build your own servers
-
-Use these patterns to create new services:
-
-1) Make a simple server file:
-
-```js
-const http = require('http');
-
-http.createServer((req, res) => {
-  res.writeHead(200, { 'content-type': 'text/plain' });
-  res.end('Hello from MHNOS');
-}).listen(3000);
-```
-
-2) Run it:
-
-```sh
-run server.js
-```
-
-3) Open it in the browser:
-
-```
-localhost:3000
-```
-
-Tip: to add dependencies, create `package.json` and use `npm install` in that directory to install all dependencies listed there.
-
-5) Open the browser app (launcher or command) and visit:
-
-```
-localhost:3000
-```
-
-## 
-
-## Creating your own apps - using oapp
-
-Simply have a local model running or use a provider like OpenRouter, OpenAI etc, then tell the App Builder what type of app you would like. It generates the code and shows the rendered page. 
-
-## How to launch an app now outside App Builder
-
-If you generated:
-
-```
-/apps/todo/
-  index.html
-  styles.css
-  app.js
-```
-
-Run:
-
-```
-oapp /apps/todo
-```
-
-That’s it.
+Then open `browser` and visit `localhost:3000`.
 
 ---
 
-## Make it easy from the Launcher (optional)
+## The WS Rust proxy (for “real internet” + TCP sockets)
 
-The Launcher already supports `type: "script"` and `type: "app"` (shell command). So to add a tile for a generated app, add an item in `/system/launcher.json` like:
+Browsers restrict networking (CORS, raw TCP). MHNOS supports a **WebSocket proxy mode** that unlocks:
 
-```json
-{
-  "id": "todo",
-  "label": "Todo App",
-  "type": "app",
-  "command": "oapp /apps/todo",
-  "icon": "✅"
-}
-```
+- proxied `fetch`
+
+- raw TCP streams
+
+Defaults:
+
+- Proxy listens on `ws://127.0.0.1:5772`
+
+- MHNOS default proxy URL is `ws://localhost:5772`
+
+Usage:
+
+1. Build/run the Rust proxy from `servers/ws-proxy-rust/`
+
+2. In MHNOS:
+   
+   - `net mode proxy`
+   
+   - `net proxy ws://localhost:5772`
+
+3. Confirm with `net status`
 
 ---
 
-
-
-## Dev - Deploying MHNOS notes
-
-To ship defaults before deploying:
-
-- Edit `demos/launcher.json` for launcher defaults.
-- Add the file to `manifest.json` so boot installs it into OPFS.
-- Add any static docs (like this README) to `manifest.json` and map them into `/demos/utils/`.
+---

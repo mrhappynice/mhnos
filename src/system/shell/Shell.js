@@ -283,6 +283,55 @@ export class Shell {
                 }
                 else this.print("File not found.", 'error');
             },
+            
+            
+            'cmd': async (args) => {
+  if (!args[0]) return this.print("Usage: cmd <file>", "error");
+  const path = this.resolvePath(args[0]);
+  const res = await fs.readFile(path, true);
+  if (!res.success) return this.print(`File not found: ${path}`, "error");
+
+  const lines = String(res.data)
+    .split(/\r?\n/)
+    .map(l => l.trim())
+    .filter(l => l && !l.startsWith("#"));
+
+  for (const line of lines) {
+    this.print(`user@mhnos:${this.cwd}$ ${line}`, "system");
+    await this.execute(line);
+  }
+},
+
+            
+            // --- PYTHON PROCESSES ---
+'python': async (args) => {
+    if (!args[0]) {
+        return this.print("Usage: python <file.py> | python -c <code>", 'error');
+    }
+
+    // python -c "print(123)"
+    if (args[0] === "-c") {
+        const code = args.slice(1).join(" ");
+        if (!code.trim()) {
+            return this.print("Usage: python -c <code>", 'error');
+        }
+        const pid = await this.os.spawnPython(code, "/inline.py");
+        this.print(`[Process ${pid}] Started: /inline.py`, 'system');
+        return;
+    }
+
+    // python file.py
+    const path = this.resolvePath(args[0]);
+    const res = await fs.readFile(path, true);
+
+    if (res.success) {
+        const pid = await this.os.spawnPython(res.data, path);
+        this.print(`[Process ${pid}] Started: ${path}`, 'system');
+    } else {
+        this.print("File not found.", 'error');
+    }
+},
+
 		
             // --- launching oapps ---
             'oapp': async (args) => {
@@ -754,48 +803,132 @@ const stylesCss = `body {
         if(this.promptStr) this.promptStr.textContent = `user@mhnos:${this.cwd}$`;
     }
 
-    attachListeners() {
-        this.input.addEventListener('keydown', (e) => {
-            if (e.key === 'c' && e.ctrlKey) {
-                e.preventDefault();
-                if (this.os.ttyAttachedPid) {
-                    const pid = this.os.ttyAttachedPid;
-                    this.os.sendTtyInput(pid, '\u0003');
-                    this.os.detachTty();
-                    this.print(`[TTY] Detached from PID ${pid}`, 'system');
-                    this.input.value = '';
-                    return;
-                }
-                if (this.os.procs.size > 0) {
-                    const lastPid = [...this.os.procs.keys()].pop();
-                    this.os.kill(lastPid);
-                }
-                this.input.value = '';
-                return;
-            }
-            if (e.key === 'Enter') {
-                const val = this.input.value.trim();
-                if (this.os.ttyAttachedPid) {
-                    const pid = this.os.ttyAttachedPid;
-                    this.os.sendTtyInput(pid, val + '\n');
-                    this.input.value = '';
-                    return;
-                }
-                if (val) {
-                    this.history.push(val);
-                    this.historyIndex = this.history.length;
-                    this.print(`user@mhnos:${this.cwd}$ ${val}`, 'system');
-                    this.execute(val);
-                    this.input.value = '';
-                }
-            }
-            if (e.key === 'ArrowUp') {
-                if (this.historyIndex > 0) {
-                    this.historyIndex--;
-                    this.input.value = this.history[this.historyIndex];
-                }
-            }
-        });
+attachListeners() {
+  this.input.addEventListener('keydown', async (e) => {
+
+    // TAB AUTOCOMPLETE (HUD shell only)
+    if (e.key === 'Tab') {
+      e.preventDefault();
+
+      // Only autocomplete when NOT attached to TTY
+      if (this.os.ttyAttachedPid) return;
+
+      const raw = this.input.value;
+      const cursor = this.input.selectionStart ?? raw.length;
+      const before = raw.slice(0, cursor);
+
+      const parts = before.split(/\s+/);
+      const frag = parts[parts.length - 1] || '';
+
+// command completion for first token, path completion for later tokens
+
+if (parts.length === 1) {
+  // COMMAND completion
+  const matches = Object.keys(this.commands)
+    .filter(c => c.startsWith(frag))
+    .sort();
+
+  if (matches.length === 1) {
+    this.input.value = matches[0] + ' ';
+  } else if (matches.length > 1) {
+    this.print(matches.join('    '), 'system');
+  }
+  return;
+}
+
+// PATH completion (2nd token and beyond)
+const token = frag;
+
+// Split token into "dirPart" + "baseFrag"
+const lastSlash = token.lastIndexOf('/');
+const dirPart = lastSlash >= 0 ? token.slice(0, lastSlash + 1) : '';
+const baseFrag = lastSlash >= 0 ? token.slice(lastSlash + 1) : token;
+
+// Determine which directory to list
+// - if user typed "some/dir/pa" => list "some/dir/"
+// - if user typed "pa" => list current cwd
+const dirToList = dirPart ? this.resolvePath(dirPart) : this.cwd;
+
+// List directory and match entries
+const res = await fs.listFiles(dirToList);
+if (!res.success) return;
+
+const matches = res.data
+  .map(ent => ent.name + (ent.type === 'directory' ? '/' : ''))
+  .filter(name => name.startsWith(baseFrag))
+  .sort();
+
+if (matches.length === 1) {
+  // Replace just the fragment token (not the whole input)
+  const completed = dirPart + matches[0];
+
+  parts[parts.length - 1] = completed;
+  const newBefore = parts.join(' ') + (completed.endsWith('/') ? '' : ''); // don't force space
+  this.input.value = newBefore + raw.slice(cursor);
+  const newCursor = newBefore.length;
+  this.input.setSelectionRange(newCursor, newCursor);
+} else if (matches.length > 1) {
+  this.print(matches.join('    '), 'system');
+}
+
+      return;
+    }
+
+    // CTRL+C
+    if (e.key === 'c' && e.ctrlKey) {
+      e.preventDefault();
+
+      if (this.os.ttyAttachedPid) {
+        const pid = this.os.ttyAttachedPid;
+        this.os.sendTtyInput(pid, '\u0003');
+        this.os.detachTty();
+        this.print(`[TTY] Detached from PID ${pid}`, 'system');
+        this.input.value = '';
+        return;
+      }
+
+      if (this.os.procs.size > 0) {
+        const lastPid = [...this.os.procs.keys()].pop();
+        this.os.kill(lastPid);
+      }
+
+      this.input.value = '';
+      return;
+    }
+
+    // ENTER
+    if (e.key === 'Enter') {
+      const val = this.input.value.trim();
+
+      if (this.os.ttyAttachedPid) {
+        const pid = this.os.ttyAttachedPid;
+        this.os.sendTtyInput(pid, val + '\n');
+        this.input.value = '';
+        return;
+      }
+
+      if (val) {
+        this.history.push(val);
+        this.historyIndex = this.history.length;
+        this.print(`user@mhnos:${this.cwd}$ ${val}`, 'system');
+        await this.execute(val);
+        this.input.value = '';
+      }
+
+      return;
+    }
+
+    // HISTORY UP
+    if (e.key === 'ArrowUp') {
+      if (this.historyIndex > 0) {
+        this.historyIndex--;
+        this.input.value = this.history[this.historyIndex];
+      }
+      return;
+    }
+
+  });
+
         
         document.addEventListener('click', (e) => {
             const tag = e.target.tagName;
