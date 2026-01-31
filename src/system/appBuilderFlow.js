@@ -66,6 +66,16 @@ function extractFirstJsonObject(text) {
     return null;
 }
 
+function extractJsonObject(text) {
+    if (!text) return null;
+    const trimmed = String(text).trim();
+    try {
+        return JSON.parse(trimmed);
+    } catch {
+        return extractFirstJsonObject(trimmed);
+    }
+}
+
 function extractBlocks(text) {
     const blocks = { html: '', css: '', tsx: [] };
     const regex = /```(html|css|tsx)\n([\s\S]*?)```/g;
@@ -102,6 +112,67 @@ function ensureHtmlReferences(html, cssPath = 'src/styles.css', entryPath = 'src
     }
 
     return out;
+}
+
+async function requestPlan({
+    prompt,
+    llm,
+    tree,
+    root,
+    systemPrompt,
+    systemContext,
+    onLog,
+    onStatus
+}) {
+    const context = systemContext ? clampText(systemContext, 12000) : '';
+    const messages = [
+        {
+            role: 'system',
+            content:
+                'You are a planning assistant for the MHNOS Companion, a browser-based OS helper. ' +
+                'Return ONLY a single JSON object (no markdown) with this schema: ' +
+                '{"goal":"...","steps":[{"id":"1","task":"...","files":["..."],"commands":["..."],"verification":"..."}],"notes":["..."]}'
+        },
+        {
+            role: 'user',
+            content:
+                `Project root: ${root}\n` +
+                (context ? `System context (curated):\n${context}\n\n` : '') +
+                `Project tree (depth 2):\n${JSON.stringify(tree, null, 2)}\n\n` +
+                `User request:\n${prompt}\n\n` +
+                'Return the JSON plan only.'
+        }
+    ];
+
+    onStatus?.('Planning...');
+    let raw = '';
+    await llm({
+        messages,
+        onDelta: (chunk) => {
+            raw += chunk;
+            onLog?.(chunk, 'plan');
+        }
+    });
+
+    const plan = extractJsonObject(raw) || { goal: prompt, steps: [], notes: ['Plan parse failed; using empty plan.'] };
+    return plan;
+}
+
+async function verifyProject({ fs, os, root }) {
+    const notes = [];
+    if (root && root.startsWith('/apps/')) {
+        await os.shell.execute(`oapp build ${root}`);
+        const distRes = await fs.listFiles(`${root}/dist`);
+        if (!distRes || !distRes.success) {
+            notes.push('Build output missing: /dist not found after oapp build.');
+        }
+        return { ok: notes.length === 0, notes };
+    }
+    const htmlRes = await fs.readFile(`${root}/index.html`, true);
+    if (!htmlRes || !htmlRes.success) {
+        notes.push('index.html not found at project root.');
+    }
+    return { ok: notes.length === 0, notes };
 }
 
 export async function runAppBuilderFlow({
@@ -234,6 +305,13 @@ function normalizePath(root, input) {
         out.push(part);
     }
     return '/' + out.join('/');
+}
+
+function dirname(path) {
+    if (!path || path === '/') return '/';
+    const idx = path.lastIndexOf('/');
+    if (idx <= 0) return '/';
+    return path.slice(0, idx);
 }
 
 async function listTree(fs, root, depth = 2, limit = 200, prefix = '') {
@@ -405,11 +483,40 @@ function applyUnifiedDiff(originalText, patchText) {
 
 function parseAgentAction(raw) {
     const data = extractJsonBlock(raw);
-    if (!data) return null;
+    if (!data) {
+        const fallback = extractActionJson(raw);
+        if (!fallback) return null;
+        return normalizeAction(fallback);
+    }
+    const normalized = normalizeAction(data);
+    if (normalized) return normalized;
+    const fallback = extractActionJson(raw);
+    if (!fallback) return null;
+    return normalizeAction(fallback);
+}
+
+function normalizeAction(data) {
+    const TOOL_NAMES = new Set([
+        'list_dir',
+        'read_file',
+        'search',
+        'write_file',
+        'patch',
+        'create_dir',
+        'remove_path',
+        'npm_install',
+        'run'
+    ]);
     if (Array.isArray(data.actions)) {
         return { type: 'actions', actions: data.actions };
     }
     if (data.type === 'final') return data;
+    if (data.type === 'ask') return data;
+    if (data.type && TOOL_NAMES.has(data.type)) {
+        const args = { ...data };
+        delete args.type;
+        return { type: 'tool', tool: data.type, args };
+    }
     if (data.type === 'tool' && data.tool) {
         const args = data.args || {};
         return { type: 'tool', tool: data.tool, args };
@@ -423,7 +530,66 @@ function parseAgentAction(raw) {
         delete args.type;
         return { type: 'tool', tool, args };
     }
+    if (data.type === 'action' && data.tool) {
+        const args = { ...data };
+        delete args.type;
+        delete args.tool;
+        return { type: 'tool', tool: data.tool, args };
+    }
     return null;
+}
+
+function extractActionJson(text) {
+    const objects = extractAllJsonObjects(text);
+    if (!objects.length) return null;
+    for (let i = objects.length - 1; i >= 0; i--) {
+        const candidate = objects[i];
+        if (!candidate || typeof candidate !== 'object') continue;
+        if (candidate.type === 'final' || candidate.type === 'ask' || candidate.type === 'tool') return candidate;
+        if (candidate.actions || candidate.tool || candidate.action) return candidate;
+    }
+    return null;
+}
+
+function extractAllJsonObjects(text) {
+    const out = [];
+    const len = text.length;
+    for (let i = 0; i < len; i++) {
+        if (text[i] !== '{') continue;
+        let depth = 0;
+        let inStr = false;
+        let esc = false;
+        for (let j = i; j < len; j++) {
+            const ch = text[j];
+            if (inStr) {
+                if (esc) {
+                    esc = false;
+                } else if (ch === '\\\\') {
+                    esc = true;
+                } else if (ch === '"') {
+                    inStr = false;
+                }
+                continue;
+            }
+            if (ch === '"') {
+                inStr = true;
+                continue;
+            }
+            if (ch === '{') depth++;
+            if (ch === '}') {
+                depth--;
+                if (depth === 0) {
+                    const candidate = text.slice(i, j + 1);
+                    try {
+                        out.push(JSON.parse(candidate));
+                    } catch {}
+                    i = j;
+                    break;
+                }
+            }
+        }
+    }
+    return out;
 }
 
 export async function runCodingAgentFlow({
@@ -433,10 +599,17 @@ export async function runCodingAgentFlow({
     os,
     projectRoot,
     systemPrompt,
+    systemContext,
     onLog,
     onStatus,
+    onPlan,
+    onApprove,
     maxSteps = 10,
-    strictRoot = false
+    strictRoot = false,
+    requireApproval = false,
+    writeScope = 'project',
+    verify = true,
+    skipPlanning = false
 }) {
     const root = projectRoot || '/';
     await fs.createDir(root);
@@ -444,12 +617,13 @@ export async function runCodingAgentFlow({
         ? 'This is a new app. Do NOT create subdirectories. Write files directly under the project root.'
         : '';
     const toolHelp =
-        'You are a coding agent inside a browser-based OS. ' +
+        'You are the MHNOS Companion inside a browser-based OS. ' +
         `Project root is ${root}. Use it exactly; do not create nested app folders unless explicitly asked. ` +
         strictNote +
         'You can only use the tools listed below. ' +
         'Return ONLY a single JSON object describing the next action. ' +
-        'Do NOT wrap it in markdown fences. Do NOT include extra text. ' +
+        'Do NOT wrap it in markdown fences. Do NOT include extra text or plans. ' +
+        'Do NOT use type=ask. Make reasonable assumptions and proceed with tools. ' +
         'When finished, return type=final with a summary and files_changed.\n\n' +
         'Tools:\n' +
         '- list_dir { path }\n' +
@@ -462,23 +636,40 @@ export async function runCodingAgentFlow({
         '- npm_install { name, global }\n' +
         '- run { command }\n';
 
+    const contextBlock = systemContext ? `\nSystem context (curated, read-only):\n${clampText(systemContext, 12000)}\n` : '';
     const baseSystem = systemPrompt
-        ? `${toolHelp}\nAdditional guidance:\n${systemPrompt}`
-        : toolHelp;
+        ? `${toolHelp}\nAdditional guidance:\n${systemPrompt}${contextBlock}`
+        : `${toolHelp}${contextBlock}`;
 
     const tree = await listTree(fs, root, 2, 200);
+    const writeAllowedRoot = strictRoot || writeScope !== 'opfs' ? root : '/';
+    const plan = skipPlanning
+        ? { goal: prompt, steps: [], notes: ['Planning skipped.'] }
+        : await requestPlan({
+            prompt,
+            llm,
+            tree,
+            root,
+            systemPrompt,
+            systemContext,
+            onLog,
+            onStatus
+        });
+    onPlan?.(plan);
+
     const messages = [
         { role: 'system', content: baseSystem },
         {
             role: 'user',
             content:
                 `Project root: ${root}\n` +
+                `Write scope: ${writeAllowedRoot === '/' ? 'opfs' : 'project'}\n` +
+                `Approval required: ${requireApproval ? 'yes' : 'no'}\n` +
                 `User request:\n${prompt}\n\n` +
-                `Project tree (depth 2):\n${JSON.stringify(tree, null, 2)}`
+                `Project tree (depth 2):\n${JSON.stringify(tree, null, 2)}\n\n` +
+                `Plan:\n${JSON.stringify(plan, null, 2)}`
         }
     ];
-
-    const writeAllowedRoot = root;
 
     const runTool = async (tool, args = {}) => {
         const safeArgs = args || {};
@@ -515,6 +706,10 @@ export async function runCodingAgentFlow({
             }
             if (!isStrictPathAllowed(path)) {
                 return { success: false, error: 'write_file blocked in strict mode (no subdirectories)' };
+            }
+            const parent = dirname(path);
+            if (parent && parent !== '/') {
+                await fs.createDir(parent);
             }
             return await fs.writeFile(path, safeArgs.content || '');
         }
@@ -575,6 +770,7 @@ export async function runCodingAgentFlow({
     };
 
     let finalSummary = null;
+    let verifiedOnce = false;
 
     for (let step = 0; step < maxSteps; step++) {
         onStatus?.(`Agent step ${step + 1}/${maxSteps}...`);
@@ -612,10 +808,37 @@ export async function runCodingAgentFlow({
         }
         }
 
+        if (action.type === 'ask') {
+            messages.push({ role: 'assistant', content: raw });
+            messages.push({
+                role: 'user',
+                content:
+                    'Do not ask questions or request approval. ' +
+                    'Proceed with tool calls and make reasonable assumptions. ' +
+                    'Return a tool action or final result.'
+            });
+            continue;
+        }
+
         if (action.type === 'final') {
             finalSummary = action;
             messages.push({ role: 'assistant', content: raw });
-            break;
+            if (!verify || verifiedOnce) break;
+            verifiedOnce = true;
+            onStatus?.('Verifying output...');
+            const verifyRes = await verifyProject({ fs, os, root });
+            if (verifyRes.ok) {
+                onLog?.('\n[VERIFY] OK\n', 'verify');
+                break;
+            }
+            onLog?.(`\n[VERIFY] Failed:\n${verifyRes.notes.join('\n')}\n`, 'verify');
+            messages.push({
+                role: 'user',
+                content:
+                    `Verification failed:\n${verifyRes.notes.join('\n')}\n` +
+                    'Please fix the issues and then finish.'
+            });
+            continue;
         }
 
         const actions = action.type === 'actions'
@@ -627,6 +850,15 @@ export async function runCodingAgentFlow({
             const tool = act.tool;
             const args = act.args || {};
             onStatus?.(`Running tool: ${tool}`);
+            if (requireApproval && onApprove) {
+                const allowed = await onApprove({ tool, args });
+                if (!allowed) {
+                    const denied = { success: false, error: 'tool denied by user' };
+                    results.push({ tool, args, result: denied });
+                    if (onLog) onLog(`\n[APPROVAL] Denied ${tool}\n`, 'tool');
+                    continue;
+                }
+            }
             const result = await runTool(tool, args);
             results.push({ tool, args, result });
             if (onLog) {

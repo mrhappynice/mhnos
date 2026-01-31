@@ -2,6 +2,7 @@ import * as fs from '../../kernel/fs.js';
 import { runCodingAgentFlow } from '../appBuilderFlow.js';
 
 const LAUNCHER_CONFIG_PATH = '/system/launcher.json';
+const SYSTEM_CONTEXT_PATH = '/system/agent_context.md';
 
 // --- APP: APP BUILDER ---
 export class AppBuilder {
@@ -35,7 +36,12 @@ Avoid build tools that require Node/Bun unless explicitly requested.`;
         const projectRoot =
             localStorage.getItem('ab_projectRoot') || '/apps/new-project';
 
-        return { provider, model, baseURL, systemPrompt, projectRoot };
+        const useSystemContext = localStorage.getItem('ab_useSystemContext') !== 'false';
+        const confirmTools = localStorage.getItem('ab_confirmTools') !== 'false';
+        const autoVerify = localStorage.getItem('ab_autoVerify') === 'true';
+        const writeScope = localStorage.getItem('ab_writeScope') || 'project';
+
+        return { provider, model, baseURL, systemPrompt, projectRoot, useSystemContext, confirmTools, autoVerify, writeScope };
     }
 
     saveState() {
@@ -46,6 +52,10 @@ Avoid build tools that require Node/Bun unless explicitly requested.`;
         if (this.state.projectRoot) {
             localStorage.setItem('ab_projectRoot', this.state.projectRoot);
         }
+        localStorage.setItem('ab_useSystemContext', this.state.useSystemContext ? 'true' : 'false');
+        localStorage.setItem('ab_confirmTools', this.state.confirmTools ? 'true' : 'false');
+        localStorage.setItem('ab_autoVerify', this.state.autoVerify ? 'true' : 'false');
+        localStorage.setItem('ab_writeScope', this.state.writeScope || 'project');
     }
 
     getApiKey(provider) {
@@ -233,30 +243,8 @@ Avoid build tools that require Node/Bun unless explicitly requested.`;
         return out;
     }
 
-    buildPreviewSrcdoc(indexHtml, css, js) {
-        // inline styles.css + app.js into the HTML so iframe works without network or file loading.
-        // Replace <link rel="stylesheet" href="styles.css"> and <script src="app.js"></script>
-        let html = indexHtml;
-
-        html = html.replace(
-            /<link[^>]*rel=["']stylesheet["'][^>]*href=["']styles\.css["'][^>]*>/i,
-            `<style>\n${css}\n</style>`
-        );
-
-        html = html.replace(
-            /<script[^>]*src=["']app\.js["'][^>]*>\s*<\/script>/i,
-            `<script>\n${js}\n<\/script>`
-        );
-
-        // If they forgot the tags, just inject.
-        if (!/<style[\s>]/i.test(html)) {
-            html = html.replace(/<\/head>/i, `<style>\n${css}\n</style>\n</head>`);
-        }
-        if (!/<script[\s>]/i.test(html)) {
-            html = html.replace(/<\/body>/i, `<script>\n${js}\n<\/script>\n</body>`);
-        }
-
-        return html;
+    buildPreviewSrcdoc(indexHtml) {
+        return indexHtml || '';
     }
 
     async open() {
@@ -274,7 +262,6 @@ div.innerHTML = `
     <div class="ab-actions">
       <button class="ab-open">Open Folder</button>
       <button class="ab-add" disabled>Add to Launcher</button>
-      <button class="ab-generate ab-primary">Run Agent</button>
     </div>
   </div>
 
@@ -311,6 +298,35 @@ div.innerHTML = `
         <span>System Prompt</span>
         <textarea class="ab-sys" rows="4"></textarea>
       </label>
+
+      <label class="ab-field ab-wide">
+        <span>System Context</span>
+        <div style="display:flex; gap:8px; align-items:center;">
+          <input type="checkbox" class="ab-context-toggle" />
+          <span>Use ${SYSTEM_CONTEXT_PATH}</span>
+        </div>
+      </label>
+
+      <label class="ab-field ab-wide">
+        <span>Agent Behavior</span>
+        <div style="display:flex; gap:14px; align-items:center;">
+          <label style="display:flex; gap:6px; align-items:center;">
+            <input type="checkbox" class="ab-confirm-tools" />
+            <span>Confirm tool use</span>
+          </label>
+          <label style="display:flex; gap:6px; align-items:center;">
+            <input type="checkbox" class="ab-auto-verify" />
+            <span>Auto-verify (oapp build)</span>
+          </label>
+          <label style="display:flex; gap:6px; align-items:center;">
+            <span>Write scope</span>
+            <select class="ab-write-scope">
+              <option value="project">Project only</option>
+              <option value="opfs">Any OPFS path</option>
+            </select>
+          </label>
+        </div>
+      </label>
     </div>
   </details>
 
@@ -334,14 +350,13 @@ div.innerHTML = `
   </div>
 
   <div class="ab-main">
-    <section class="ab-pane ab-prompt-pane">
-      <div class="ab-pane-head">Goal</div>
-      <textarea class="ab-prompt" placeholder="Describe what you want changed or built..."></textarea>
-    </section>
-
-    <section class="ab-pane ab-log-pane">
-      <div class="ab-pane-head">Agent Log</div>
-      <pre class="ab-log"></pre>
+    <section class="ab-pane ab-chat-pane">
+      <div class="ab-pane-head">Chat</div>
+      <div class="ab-chat-log"></div>
+      <div class="ab-chat-input">
+        <textarea class="ab-prompt" placeholder="Ask about the system or request a change..."></textarea>
+        <button class="ab-generate ab-primary">Send</button>
+      </div>
     </section>
 
     <section class="ab-pane ab-preview-pane">
@@ -364,13 +379,41 @@ div.innerHTML = `
         const createAppBtn = div.querySelector('.ab-create-app');
         const promptEl = div.querySelector('.ab-prompt');
         const sysEl = div.querySelector('.ab-sys');
+        const contextToggleEl = div.querySelector('.ab-context-toggle');
+        const confirmToolsEl = div.querySelector('.ab-confirm-tools');
+        const autoVerifyEl = div.querySelector('.ab-auto-verify');
+        const writeScopeEl = div.querySelector('.ab-write-scope');
         const statusEl = div.querySelector('.ab-status');
-        const logEl = div.querySelector('.ab-log');
+        const chatLogEl = div.querySelector('.ab-chat-log');
         const frameEl = div.querySelector('.ab-preview');
         const genBtn = div.querySelector('.ab-generate');
         const openBtn = div.querySelector('.ab-open');
         const addBtn = div.querySelector('.ab-add');
         let lastGenerated = null;
+        let logPhase = null;
+        let streamEl = null;
+
+        const addMessage = (role, text) => {
+            const el = document.createElement('div');
+            el.className = `ab-msg ab-msg-${role}`;
+            el.textContent = text || '';
+            if (role === 'assistant') {
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'ab-copy';
+                copyBtn.textContent = 'Copy';
+                copyBtn.onclick = async (e) => {
+                    e.stopPropagation();
+                    const content = el.textContent || '';
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        try { await navigator.clipboard.writeText(content); } catch {}
+                    }
+                };
+                el.appendChild(copyBtn);
+            }
+            chatLogEl.appendChild(el);
+            chatLogEl.scrollTop = chatLogEl.scrollHeight;
+            return el;
+        };
 
         const toTitle = (text) => text
             .split('-')
@@ -431,6 +474,10 @@ div.innerHTML = `
         sysEl.value = this.state.systemPrompt;
         keyEl.value = this.getApiKey(this.state.provider) || '';
         nameEl.value = this.state.projectRoot || '';
+        contextToggleEl.checked = !!this.state.useSystemContext;
+        confirmToolsEl.checked = !!this.state.confirmTools;
+        autoVerifyEl.checked = !!this.state.autoVerify;
+        writeScopeEl.value = this.state.writeScope || 'project';
 
         const syncKeyField = () => {
             const p = providerEl.value;
@@ -475,6 +522,26 @@ div.innerHTML = `
 
         sysEl.addEventListener('change', () => {
             this.state.systemPrompt = sysEl.value;
+            this.saveState();
+        });
+
+        contextToggleEl.addEventListener('change', () => {
+            this.state.useSystemContext = !!contextToggleEl.checked;
+            this.saveState();
+        });
+
+        confirmToolsEl.addEventListener('change', () => {
+            this.state.confirmTools = !!confirmToolsEl.checked;
+            this.saveState();
+        });
+
+        autoVerifyEl.addEventListener('change', () => {
+            this.state.autoVerify = !!autoVerifyEl.checked;
+            this.saveState();
+        });
+
+        writeScopeEl.addEventListener('change', () => {
+            this.state.writeScope = writeScopeEl.value || 'project';
             this.saveState();
         });
 
@@ -549,18 +616,19 @@ div.innerHTML = `
         await refreshAppList();
 
         genBtn.onclick = async () => {
-            logEl.textContent = '';
             frameEl.srcdoc = '';
             frameEl.src = '';
-            let logPhase = null;
+            logPhase = null;
+            streamEl = null;
             const appendLog = (chunk, phase) => {
-                const nextPhase = phase || 'generate';
+                const nextPhase = phase || 'agent';
+                if (!streamEl) streamEl = addMessage('assistant', '');
                 if (nextPhase !== logPhase) {
                     logPhase = nextPhase;
-                    logEl.textContent += `\n\n[${logPhase.toUpperCase()}]\n`;
+                    streamEl.textContent += `\n[${logPhase.toUpperCase()}]\n`;
                 }
-                logEl.textContent += chunk;
-                logEl.scrollTop = logEl.scrollHeight;
+                streamEl.textContent += chunk;
+                chatLogEl.scrollTop = chatLogEl.scrollHeight;
             };
 
             const projectRoot = resolveProjectPath();
@@ -571,6 +639,8 @@ div.innerHTML = `
                 statusEl.textContent = 'Enter a prompt.';
                 return;
             }
+            addMessage('user', userPrompt);
+            promptEl.value = '';
 
             // Persist current selections
             this.state.provider = providerEl.value;
@@ -578,10 +648,24 @@ div.innerHTML = `
             this.state.model = modelEl.value || this.state.model;
             this.state.systemPrompt = sysEl.value;
             this.state.projectRoot = projectRoot;
+            this.state.useSystemContext = !!contextToggleEl.checked;
+            this.state.confirmTools = !!confirmToolsEl.checked;
+            this.state.autoVerify = !!autoVerifyEl.checked;
+            this.state.writeScope = writeScopeEl.value || 'project';
             this.saveState();
             this.setApiKey(this.state.provider, keyEl.value.trim());
 
             try {
+                let systemContext = '';
+                if (this.state.useSystemContext) {
+                    const ctxRes = await fs.readFile(SYSTEM_CONTEXT_PATH, true);
+                    if (ctxRes && ctxRes.success && typeof ctxRes.data === 'string') {
+                        systemContext = ctxRes.data;
+                    } else {
+                        appendLog(`\n[WARN] Missing system context at ${SYSTEM_CONTEXT_PATH}\n`, 'warn');
+                    }
+                }
+
                 const listRes = await fs.listFiles(projectRoot);
                 const strictRoot = projectRoot.startsWith('/apps/') && listRes && listRes.success && Array.isArray(listRes.data) && listRes.data.length === 0;
 
@@ -591,7 +675,11 @@ div.innerHTML = `
                     os: this.os,
                     projectRoot,
                     systemPrompt: this.state.systemPrompt,
+                    systemContext,
                     strictRoot,
+                    requireApproval: this.state.confirmTools,
+                    verify: this.state.autoVerify,
+                    writeScope: this.state.writeScope,
                     llm: ({ messages, onDelta }) =>
                         this.streamChat({
                             provider: this.state.provider,
@@ -601,6 +689,13 @@ div.innerHTML = `
                             onDelta
                         }),
                     onLog: appendLog,
+                    onPlan: (plan) => {
+                        appendLog(`\n[PLAN]\n${JSON.stringify(plan, null, 2)}\n`, 'plan');
+                    },
+                    onApprove: async ({ tool, args }) => {
+                        const summary = `${tool} ${JSON.stringify(args || {})}`;
+                        return window.confirm(`Run tool?\n\n${summary}`);
+                    },
                     onStatus: (s) => (statusEl.textContent = s),
                     maxSteps: 10
                 });
@@ -613,11 +708,7 @@ div.innerHTML = `
                     }
                     frameEl.src = `${projectRoot}/index.html`;
                 } else if (htmlRes.success) {
-                    const cssRes = await fs.readFile(`${projectRoot}/styles.css`, true);
-                    const jsRes = await fs.readFile(`${projectRoot}/app.js`, true);
-                    const css = (cssRes && cssRes.success) ? (cssRes.data || '') : '';
-                    const js = (jsRes && jsRes.success) ? (jsRes.data || '') : '';
-                    const srcdoc = this.buildPreviewSrcdoc(htmlRes.data, css, js);
+                    const srcdoc = this.buildPreviewSrcdoc(htmlRes.data);
                     frameEl.srcdoc = srcdoc;
                 } else {
                     const fallback = await findIndexHtml(projectRoot, 4);
@@ -631,11 +722,7 @@ div.innerHTML = `
                             frameEl.src = `${base}/index.html`;
                             appendLog(`\n[WARN] index.html not found at root. Previewing ${fallback}\n`, 'warn');
                         } else if (htmlAlt && htmlAlt.success) {
-                            const cssAlt = await fs.readFile(`${base}/styles.css`, true);
-                            const jsAlt = await fs.readFile(`${base}/app.js`, true);
-                            const css = (cssAlt && cssAlt.success) ? (cssAlt.data || '') : '';
-                            const js = (jsAlt && jsAlt.success) ? (jsAlt.data || '') : '';
-                            const srcdoc = this.buildPreviewSrcdoc(htmlAlt.data, css, js);
+                            const srcdoc = this.buildPreviewSrcdoc(htmlAlt.data);
                             frameEl.srcdoc = srcdoc;
                             appendLog(`\n[WARN] index.html not found at root. Previewing ${fallback}\n`, 'warn');
                         } else {
@@ -646,9 +733,16 @@ div.innerHTML = `
                     }
                 }
 
-                if (finalSummary && finalSummary.summary) {
+                const summaryText = finalSummary && (finalSummary.summary || finalSummary.message);
+                if (summaryText) {
                     statusEl.textContent = 'Completed';
-                    appendLog(`\n[SUMMARY]\n${finalSummary.summary}\n`, 'summary');
+                    appendLog(`\n[SUMMARY]\n${summaryText}\n`, 'summary');
+                    if (finalSummary.questions && Array.isArray(finalSummary.questions)) {
+                        appendLog(`\n[QUESTIONS]\n${finalSummary.questions.join('\n')}\n`, 'summary');
+                    }
+                    if (finalSummary.suggested_tools && Array.isArray(finalSummary.suggested_tools)) {
+                        appendLog(`\n[SUGGESTED TOOLS]\n${JSON.stringify(finalSummary.suggested_tools, null, 2)}\n`, 'summary');
+                    }
                 } else {
                     statusEl.textContent = 'Completed';
                 }
@@ -666,5 +760,12 @@ div.innerHTML = `
                 console.error(e);
             }
         };
+
+        promptEl.addEventListener('keydown', (e) => {
+            if (e.key !== 'Enter') return;
+            if (e.shiftKey) return;
+            e.preventDefault();
+            genBtn.click();
+        });
     }
 }

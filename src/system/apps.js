@@ -3,7 +3,7 @@ export { SettingsApp } from './apps/SettingsApp.js';
 export { Nano } from './apps/Nano.js';
 export { SystemLog } from './apps/SystemLog.js';
 export { GfxDisplay } from './apps/GfxDisplay.js';
-export { AppBuilder } from './apps/AppBuilder.js';
+export { CompanionApp } from './apps/CompanionApp.js';
 export { PackeditEditor } from './apps/PackeditEditor.js';
 export { BrowserApp } from './apps/BrowserApp.js';
 export { TerminalApp } from './apps/TerminalApp.js';

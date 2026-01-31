@@ -96,10 +96,15 @@ export class LauncherApp {
                 addIfMissing({ id: 'files', label: 'Files', type: 'app', command: 'files', icon: '📁' });
                 addIfMissing({ id: 'link', label: 'Tools Menu', type: 'url', url: 'https://tools.mhn.lol', icon: '⚒️' });
                 addIfMissing({ id: 'codejournal', label: 'Code Journal', type: 'url', url: 'https://cj.mhn.lol', icon: '📓' });
-                addIfMissing({ id: 'appbuilder', label: 'Coding Agent', type: 'app', command: 'appbuilder', icon: '🧪' });
+                addIfMissing({ id: 'companion', label: 'Companion', type: 'app', command: 'companion', icon: '🧭' });
                 addIfMissing({ id: 'packedit', label: 'Packedit', type: 'app', command: 'packedit', icon: '🧩' });
                 addIfMissing({ id: 'wget-md', label: 'wget-url.md', type: 'markdown', path: '/demos/utils/wget-url.md', icon: '🪃' });
                 addIfMissing({ id: 'readme-md', label: 'README', type: 'markdown', path: '/demos/utils/README.md', icon: '📖' });
+                const legacy = items.find(entry => entry.id === 'appbuilder');
+                if (legacy) {
+                    legacy.command = 'companion';
+                    legacy.label = legacy.label || 'Companion';
+                }
                 config.items = items;
                 if (!config.version || config.version < 2) config.version = 2;
                 await fs.writeFile(LAUNCHER_CONFIG_PATH, JSON.stringify(config, null, 2));
@@ -117,7 +122,7 @@ export class LauncherApp {
                 { id: 'files', label: 'Files', type: 'app', command: 'files', icon: '📁' },
                 { id: 'link', label: 'Tools Menu', type: 'url', url: 'https://tools.mhn.lol', icon: '🔗' },
                 { id: 'codejournal', label: 'Code Journal', type: 'url', url: 'https://cj.mhn.lol', icon: '🗒️' },
-                { id: 'appbuilder', label: 'Coding Agent', type: 'app', command: 'appbuilder', icon: '🧪' },
+                { id: 'companion', label: 'Companion', type: 'app', command: 'companion', icon: '🧭' },
                 { id: 'packedit', label: 'Packedit', type: 'app', command: 'packedit', icon: '🧩' },
                 { id: 'wget-md', label: 'wget-url.md', type: 'markdown', path: '/demos/utils/wget-url.md', icon: '📝' },
                 { id: 'readme-md', label: 'README', type: 'markdown', path: '/demos/utils/README.md', icon: '📘' }

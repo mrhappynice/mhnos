@@ -12,6 +12,7 @@
   { "src": "demos/hello/src/App.tsx", "dest": "/apps/hello/src/App.tsx" },
   { "src": "demos/hello/src/styles.css", "dest": "/apps/hello/src/styles.css" },
   { "src": "demos/launcher.json", "dest": "/system/launcher.json" },
+  { "src": "demos/agent_context.md", "dest": "/system/agent_context.md" },
   { "src": "demos/README.md", "dest": "/demos/utils/README.md" },
   { "src": "mhnos-sw.js", "dest": "/mhnos-sw.js" },
   { "src": "mhnos-vite-worker.js", "dest": "/mhnos-vite-worker.js" },

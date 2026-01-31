@@ -55,8 +55,8 @@ export async function writeFile(path, content) {
             // Ignore SW notification errors
         }
         return { success: true };
-    } catch {
-        return { success: true, data: { exists: false, isDir: false } };
+    } catch (err) {
+        return { success: false, error: err?.message || 'write failed' };
     }
 }
 

@@ -30,6 +30,13 @@
       "icon": "📓"
     },
     {
+      "id": "companion",
+      "label": "Companion",
+      "type": "app",
+      "command": "companion",
+      "icon": "🧭"
+    },
+    {
       "id": "packedit",
       "label": "Packedit",
       "type": "app",

@@ -1,6 +1,6 @@
 import * as fs from '../../kernel/fs.js';
 import { runBackupCommand } from '../backup.js';
-import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp, AppBuilder, PackeditEditor, TerminalApp } from '../apps.js';
+import { Nano, SettingsApp, FileExplorer, BrowserApp, LauncherApp, CompanionApp, PackeditEditor, TerminalApp } from '../apps.js';
 import { PackageManager } from '../npm.js';
 import {
     normalizePath,
@@ -60,6 +60,7 @@ export class Shell {
                 this.print("  browser              - open browser app", 'system');
                 this.print("  files                - open file explorer", 'system');
                 this.print("  launcher             - open launcher", 'system');
+                this.print("  companion            - open companion app", 'system');
                 this.print("  ps                   - list processes", 'system');
                 this.print("  kill <pid>           - kill a process", 'system');
                 this.print("  backup               - encrypted backup/restore", 'system');
@@ -682,7 +683,8 @@ const stylesCss = `body {
 },
 
             'browser': () => new BrowserApp(this.os).open(),
-			'appbuilder': () => new AppBuilder(this.os).open(),
+			'companion': () => new CompanionApp(this.os).open(),
+            'appbuilder': () => new CompanionApp(this.os).open(),
             'packedit': (args) => new PackeditEditor(this.os).open(args && args[0] ? args[0] : '/apps'),
             'launcher': () => {
                 if (this.os.launcher) this.os.launcher.open();
