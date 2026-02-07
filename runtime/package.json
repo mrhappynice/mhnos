@@ -1,0 +1,35 @@
+{
+  "name": "@mhnos/runtime",
+  "version": "1.0.0",
+  "description": "MHNOS External Workerd Runtime - Bridge server for isolated Node.js/Python execution",
+  "main": "server.js",
+  "type": "module",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test test/**/*.test.js",
+    "docker:build": "docker build -t mhnos/runtime .",
+    "docker:run": "docker run -d -p 127.0.0.1:18790:18790 -v mhnos-workspace:/workspace --name mhnos-runtime mhnos/runtime",
+    "docker:compose": "docker-compose up -d",
+    "docker:compose:openclaw": "docker-compose --profile openclaw up -d",
+    "docker:stop": "docker-compose down"
+  },
+  "dependencies": {
+    "ws": "^8.18.0",
+    "@lydell/node-pty": "^1.0.3"
+  },
+  "devDependencies": {},
+  "keywords": [
+    "mhnos",
+    "workerd",
+    "web-os",
+    "isolated-runtime",
+    "openclaw",
+    "ai-agents"
+  ],
+  "author": "MHNOS Project",
+  "license": "MIT"
+}

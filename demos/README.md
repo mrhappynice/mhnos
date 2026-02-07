@@ -1,266 +1,375 @@
-# MHNOS Web OS
+# MHNOS External Runtime Guide
 
-## Welcome to **MHNOS** — an **isolated, in-browser dev environment** that feels like a tiny operating system:
+This guide explains how to use the **MHNOS Workerd Runtime** - an external Docker container that runs Node.js, Python, and Workerd processes with full system isolation.
 
-## TL;DR
+## What is the External Runtime?
 
-MHNOS is a **mini dev OS in your browser**:
+The external runtime is a Docker container that provides:
+- **Full Node.js 22+** with native module support
+- **Workerd** (Cloudflare Workers runtime)
+- **Python 3** with pip
+- **Bash shells** with PTY support
+- **Process isolation** from your host system
+- **Optional OpenClaw** AI agent framework
 
-- persistent filesystem
-- shell + scripts
-- JS + Python processes
-- npm installs
-- app scaffolding + bundling
-- Packedit for build/serve/export
-- optional Rust WS proxy for real networking + TCP
-
-It’s designed to be friendly and fun: you can learn by doing, without installing a giant toolchain first.
-
-## Why this exists
-
-Modern dev stacks are powerful, but they’re also heavy. MHNOS flips the script:
-
-- Your workspace lives in the browser (persisted in OPFS).
-- Your code runs in isolated workers (safer, cleaner, less “it broke my machine”).
-- You can build + bundle + export projects right here.
-- You can run Node-ish scripts (Express-style demos included).
-- You can run Python (Pyodide-based) and read/write files inside the same OS filesystem.
-
-## Mental model
-
-### “Disk”
-
-Your “disk” is the browser’s **Origin Private File System (OPFS)**. It persists between refreshes.
-
-### “Processes”
-
-When you `run` code, MHNOS launches a **Worker process** and tracks it with a PID. The OS can list processes and attach a TTY.
-
-### “Apps”
-
-Apps are windows. Some are utilities (Files, Browser, Launcher), some are dev tools (Packedit), and you can scaffold your own apps (oapp).
-
-## Getting around
-
-The shell prompt shows your current working directory:
-
-user@mhnos:/somewhere$
-
-Basics:
-
-- `pwd` prints the working directory
-
-- `ls` lists files
-
-- `cd` moves
-
-- `cat` prints a file
-
-- `mkdir`, `rm`, `cp` do what you expect
+Unlike the in-browser workers, this runtime can:
+- Spawn child processes
+- Use native Node.js modules
+- Run OpenClaw/Moltbot AI agents
+- Execute shell commands
 
 ---
 
-## Shell commands
+## Quick Start
 
-Run `help` in MHNOS for the canonical list.
+### 1. Start the Runtime
 
-### Files + editing
+```bash
+cd /workspace/runtime
 
-- `edit <file>` — open the editor (quick edits + save)
+# Basic runtime (Node.js + Workerd)
+docker-compose up -d
 
-- `md <file>` — open markdown preview
-
-- `upload [folder|-r]` — upload files/folders into OPFS
-
-### Running code + processes
-
-- `run <file>` — run a JS process in a worker
-
-- `ps` — list running processes
-
-- `kill <pid>` — kill a process
-
-### TTY + Terminal windows
-
-MHNOS supports attaching a “TTY” stream to a process and viewing it in a terminal window:
-
-- `tty status`
-
-- `tty attach <pid>`
-
-- `tty detach`
-
-Open a full terminal UI:
-
-- `term <pid>`
-
-### Command scripts (.cmds)
-
-You can execute a file full of shell commands:
-
-- `cmd <file>` — reads a file, strips comments/blank lines, and runs commands line-by-line
-
-Example included:
-
-- `demos/install-react.cmds` installs React + ReactDOM globally via `npm install -g ...`
-
-### Python
-
-MHNOS can spawn Python processes:
-
-- `python <file.py>`
-
-- `python -c <code>`
-
-Under the hood:
-
-- Python runs in a dedicated worker using **Pyodide**
-
-- Loaded from `/vendor/pyodide/full/pyodide.js`
-
-- Index URL `/vendor/pyodide/full/`
-
-- OPFS is mounted at `/opfs`
-
-- The process `chdir`s to `/opfs` by default
-
-- Interactive input is supported via buffered TTY lines for `input()`
-
-### oapp: your “make an app” workflow
-
-`oapp` is the built-in app runner + scaffolder:
-
-- `oapp <path>` — launch an app
-
-- `oapp init [path]` — scaffold a Vite-style React app
-
-- `oapp build [path]` — bundle to `dist/`
-
-`oapp init` creates:
-
-- `index.html`
-
-- `src/main.tsx`
-
-- `src/App.tsx`
-
-- `src/styles.css`
-
-`oapp build`:
-
-- reads `index.html`
-
-- finds your entry module
-
-- bundles with esbuild
-
-- copies non-src assets into `dist/`
-
-- writes bundled assets into `dist/assets`
-
-### npm (package installs inside Web OS)
-
-MHNOS includes a PackageManager exposed through:
-
-- `npm install <package|package.json> [-g|--global]`
-
-Convenience helper:
-
-- `serverhere` — copies `/demos/site/server.js` into your cwd and installs express
-
-### Networking controls (direct vs proxy)
-
-Network modes:
-
-- `direct` — normal fetch when allowed
-
-- `proxy` — WebSocket proxy for fetch + raw TCP
-
-- `worker` — placeholder (not fully implemented)
-
-Shell controls:
-
-- `net status`
-
-- `net mode <direct|proxy|worker>`
-
-- `net proxy <ws-url>`
-
-**Important:** TCP requires proxy mode.
-
----
-
-## Packedit (the “build/export” editor)
-
-**Packedit** is a project editor built into MHNOS — meant for “open a folder and ship something”.
-
-It includes:
-
-- project picker
-
-- file tree (skips `node_modules`, `dist`, `.git`, `.cache`)
-
-- editor pane
-
-- live preview iframe
-
-- action buttons: **Build**, **Serve**, **Zip dist**, **Save**
-
-If your goal is:
-
-- build a project
-
-- preview it
-
-- export a distributable (zip)
-
-Packedit is the “do it all from one window” path.
-
----
-
-## Running servers inside MHNOS
-
-MHNOS can run “Node-ish” server scripts inside worker processes (demo uses Express).
-
-Quick path:
-
-```sh
-mkdir /projects
-cd /projects
-serverhere
-run server.js
+# Or with OpenClaw support
+docker-compose --profile openclaw up -d
 ```
 
-Then open `browser` and visit `localhost:3000`.
+### 2. Verify it's Running
+
+```bash
+curl http://localhost:18790/health
+```
+
+### 3. Connect from MHNOS
+
+In the MHNOS shell:
+```bash
+runtime connect ws://localhost:18790
+```
+
+You should see: `[Runtime] Connected to external runtime`
 
 ---
 
-## The WS Rust proxy (for “real internet” + TCP sockets)
+## File Sharing (Volume Mount)
 
-Browsers restrict networking (CORS, raw TCP). MHNOS supports a **WebSocket proxy mode** that unlocks:
+The runtime uses a **shared folder** approach:
 
-- proxied `fetch`
+**On your computer:** Files in `~/mhnos-workspace` (or wherever you mounted)  
+**In the container:** Files appear at `/workspace`
 
-- raw TCP streams
+### docker-compose.yml Setup
 
-Defaults:
+```yaml
+volumes:
+  - ~/mhnos-workspace:/workspace  # Change this path as needed
+```
 
-- Proxy listens on `ws://127.0.0.1:5772`
+### Workflow
 
-- MHNOS default proxy URL is `ws://localhost:5772`
-
-Usage:
-
-1. Build/run the Rust proxy from `servers/ws-proxy-rust/`
-
-2. In MHNOS:
-   
-   - `net mode proxy`
-   
-   - `net proxy ws://localhost:5772`
-
-3. Confirm with `net status`
+1. **Upload to Web OS**: Use `upload` command → files go to OPFS
+2. **Export to shared folder**: Use `backup` command → files go to `~/mhnos-workspace`
+3. **Runtime sees files**: Container accesses `/workspace`
+4. **Runtime writes files**: Appears in `~/mhnos-workspace`
+5. **Import to Web OS**: Use `upload` from `~/mhnos-workspace` → back to OPFS
 
 ---
 
+## Commands Reference
+
+### Runtime Management
+
+| Command | Description |
+|---------|-------------|
+| `runtime status` | Check connection and runtime info |
+| `runtime connect [url]` | Connect to runtime (default: ws://localhost:18790) |
+| `runtime disconnect` | Disconnect from runtime |
+| `runtime list` | List running runtime processes |
+
+### Process Spawning
+
+| Command | Description |
+|---------|-------------|
+| `runtime spawn node <script.js> [args]` | Run Node.js script |
+| `runtime spawn python <script.py> [args]` | Run Python script |
+| `runtime spawn workerd <config.capnp>` | Run Workerd with config |
+| `rshell` | Spawn interactive bash shell |
+| `workerd <config.capnp>` | Quick workerd spawn |
+
+### Process Control
+
+| Command | Description |
+|---------|-------------|
+| `runtime kill <pid>` | Kill a runtime process |
+| `runtime attach <pid>` | Attach shell to process output |
+| `term --runtime <pid>` | Open terminal window for process |
+
+### File Sync (Alternative to Volume Mount)
+
+| Command | Description |
+|---------|-------------|
+| `fsync status` | Check sync status |
+| `fsync push` | Push OPFS files to runtime (slower) |
+| `fsync pull` | Pull runtime files to OPFS (slower) |
+
+> **Note:** `fsync` sends files through WebSocket. For large files, use the volume mount approach instead.
+
+### OpenClaw (if enabled in container)
+
+| Command | Description |
+|---------|-------------|
+| `openclaw status` | Check if OpenClaw is available |
+| `openclaw start` | Start OpenClaw gateway |
+| `openclaw attach` | Attach terminal to OpenClaw |
+
 ---
+
+## Usage Examples
+
+### Example 1: Run a Node.js Script
+
+```bash
+# In MHNOS, create a script
+edit /myapp/hello.js
+```
+
+Content:
+```javascript
+console.log("Hello from external runtime!");
+console.log("Node version:", process.version);
+console.log("Working directory:", process.cwd());
+```
+
+Save and export:
+```bash
+# Export to shared folder (~/mhnos-workspace)
+backup export /myapp
+```
+
+Spawn in runtime:
+```bash
+runtime connect
+runtime spawn node /workspace/hello.js
+```
+
+### Example 2: Interactive Shell Session
+
+```bash
+# Connect to runtime
+runtime connect
+
+# Spawn a bash shell
+rshell
+# Note the PID output, e.g., "[Runtime Shell 1000] Started"
+
+# Attach terminal
+term --runtime 1000
+```
+
+Now you have a full bash shell! Install packages, run commands, etc.:
+```bash
+npm install express
+node -e "console.log('Hello')"
+```
+
+### Example 3: Run OpenClaw
+
+With OpenClaw-enabled container:
+
+```bash
+# Start OpenClaw gateway
+openclaw start
+
+# Attach to see output
+openclaw attach
+```
+
+Or manually:
+```bash
+rshell
+runtime list  # Get PID
+term --runtime <pid>
+
+# In the shell:
+openclaw gateway --config /workspace/openclaw-config.json
+```
+
+### Example 4: Workerd Configuration
+
+Create a workerd config in your shared folder (`~/mhnos-workspace/app.capnp`):
+
+```capnp
+using Workerd = import "/workerd/workerd.capnp";
+
+const config :Workerd.Config = (
+  services = [(name = "main", worker = .worker)],
+  sockets = [(name = "http", address = "127.0.0.1:8080", http = (), service = "main")]
+);
+
+const worker :Workerd.Worker = (
+  compatibilityDate = "2025-01-01",
+  compatibilityFlags = ["nodejs_compat"],
+  modules = [(name = "main", esModule = embed "app.js")]
+);
+```
+
+Create `~/mhnos-workspace/app.js`:
+```javascript
+export default {
+  async fetch(request) {
+    return new Response("Hello from Workerd!");
+  }
+}
+```
+
+Run in MHNOS:
+```bash
+runtime connect
+workerd /workspace/app.capnp
+```
+
+---
+
+## Container Variants
+
+### Standard Runtime
+- Node.js 22+
+- Workerd
+- Python 3
+- Bash
+
+```bash
+docker-compose up -d
+```
+
+### OpenClaw Runtime
+- Everything in standard
+- Plus OpenClaw AI agent framework
+- Requires more memory (8GB recommended)
+
+```bash
+docker-compose --profile openclaw up -d mhnos-runtime-openclaw
+```
+
+Connects on port **18791** instead of 18790.
+
+---
+
+## Troubleshooting
+
+### Connection Refused
+
+```bash
+# Check if container is running
+docker ps | grep mhnos
+
+# Check logs
+docker logs mhnos-runtime
+
+# Restart
+docker-compose restart
+```
+
+### Permission Denied on Volume
+
+Make sure the mounted folder is writable:
+```bash
+chmod 777 ~/mhnos-workspace
+```
+
+### OpenClaw Not Found
+
+You need the OpenClaw profile:
+```bash
+docker-compose --profile openclaw up -d mhnos-runtime-openclaw
+runtime connect ws://localhost:18791
+```
+
+### Process Spawn Fails
+
+Check available commands in runtime:
+```bash
+rshell
+which node
+which python3
+which workerd
+which openclaw  # If enabled
+```
+
+### High Memory Usage
+
+The OpenClaw container uses significant memory. Adjust in `docker-compose.yml`:
+
+```yaml
+deploy:
+  resources:
+    limits:
+      memory: 8G  # Adjust as needed
+```
+
+---
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Your Computer                           │
+│  ┌──────────────────┐          ┌──────────────────────────┐ │
+│  │  Web OS (Browser)│          │  Docker Container        │ │
+│  │                  │          │  ┌────────────────────┐  │ │
+│  │  OPFS (files)    │◄────────►│  │  Node.js 22+       │  │ │
+│  │  Shell/Terminal  │ WebSocket│  │  Workerd           │  │ │
+│  │                  │          │  │  Python            │  │ │
+│  └──────────────────┘          │  │  OpenClaw (opt)    │  │ │
+│           │                    │  └────────────────────┘  │ │
+│           │ Backup/Upload      │           │              │ │
+│           ▼                    │           ▼              │ │
+│  ┌──────────────────┐          │  ┌────────────────────┐  │ │
+│  │  ~/mhnos-workspace│◄────────►│  │  /workspace        │  │ │
+│  │  (Shared Folder)  │ Volume   │  │  (Container FS)    │  │ │
+│  └──────────────────┘          │  └────────────────────┘  │ │
+│                                └──────────────────────────┘ │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Building Custom Runtime
+
+To add your own tools to the runtime:
+
+1. Edit `runtime/Dockerfile`
+2. Add your packages:
+   ```dockerfile
+   RUN apt-get install -y your-package
+   RUN npm install -g your-tool
+   ```
+3. Rebuild:
+   ```bash
+   docker-compose build --no-cache
+   docker-compose up -d
+   ```
+
+---
+
+## Security Notes
+
+- Runtime runs as non-root user (`mhnos`)
+- Container has read-only root filesystem
+- Network access is restricted to WebSocket port
+- Volume mount only exposes the workspace folder
+- For production, consider additional sandboxing
+
+---
+
+## Next Steps
+
+- Try running OpenClaw AI agents
+- Experiment with Workerd configurations
+- Build custom tools in the runtime
+- Share files between Web OS and runtime via volume mount
+
+For issues or questions, check the runtime logs:
+```bash
+docker logs -f mhnos-runtime
+```

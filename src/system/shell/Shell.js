@@ -18,13 +18,23 @@ import {
     rewriteIndexHtml,
     copyDirRecursive
 } from './helpers.js';
+import { registerS3Commands } from './s3Commands.js';
 
 export class Shell {
-    constructor(os) {
+    constructor(os, io = null) {
         this.os = os;
-        this.input = document.getElementById('cmd-input');
-        this.output = document.getElementById('shell-output');
-        this.promptStr = document.querySelector('.prompt');
+        // HUD defaults
+        this.input = io?.input ?? document.getElementById('cmd-input');
+        this.output = io?.output ?? document.getElementById('shell-output');
+        this.promptStr = io?.promptStr ?? document.querySelector('.prompt');
+
+        // IO adapters (TerminalApp can inject these)
+        this._printFn = io?.print ?? null;     // (msg, type) => void
+        this._writeFn = io?.write ?? null;     // (raw) => void (no newline)
+        this._clearFn = io?.clear ?? null;     // () => void
+        
+        // Callback for when a process is spawned (TerminalApp uses this to attach TTY)
+        this.onSpawn = io?.onSpawn ?? null;    // (pid, name) => void
         
         // --- RESTORED MISSING PROPERTIES ---
         this.history = [];
@@ -66,11 +76,30 @@ export class Shell {
                 this.print("  backup               - encrypted backup/restore", 'system');
                 this.print("  net [status|mode|proxy] - network mode/proxy settings", 'system');
                 this.print("  tty [attach|detach|status] - attach shell to a process", 'system');
-                this.print("  term <pid>            - open terminal window for a process", 'system');
+                this.print("  term [--runtime] [pid] - open terminal window (interactive or attach to process)", 'system');
                 this.print("  serverhere            - copy /demos/site/server.js to ./server.js and install express", 'system');
+                this.print("", 'system');
+                this.print("External Runtime Commands (workerd):", 'accent');
+                this.print("  runtime [status|connect|disconnect] - manage runtime connection", 'system');
+                this.print("  runtime list                        - list runtime processes", 'system');
+                this.print("  runtime spawn <type> <cmd> [args]   - spawn process in runtime", 'system');
+                this.print("  runtime kill <pid>                  - kill runtime process", 'system');
+                this.print("  runtime attach <pid>                - attach to runtime process output", 'system');
+                this.print("  workerd <config.capnp>              - spawn workerd with config", 'system');
+                this.print("  rshell                              - spawn shell in runtime", 'system');
+                this.print("  fsync [status|push|pull]            - sync files with runtime (legacy)", 'system');
+                this.print("  openclaw [status|start|attach]      - manage OpenClaw AI agent", 'system');
+                this.print("", 'system');
+                this.print("S3 File Sync Commands (remote VPS):", 'accent');
+                this.print("  s3status                            - check S3 configuration", 'system');
+                this.print("  s3push [path] [--exclude=pattern]   - upload files to S3", 'system');
+                this.print("  s3pull [prefix] [--force]           - download files from S3", 'system');
+                this.print("  s3ls [prefix] [--limit=N]           - list files in S3 bucket", 'system');
+                this.print("  s3sync [path]                       - bidirectional sync", 'system');
+                this.print("  s3rm <key>                          - delete file from S3", 'system');
             },
-            'clear': () => this.output.innerHTML = '',
-            'cls': () => this.output.innerHTML = '',
+            'clear': () => this.clearScreen(),
+            'cls': () => this.clearScreen(),
             
                         'upload': (args) => {
                 // Usage: 'upload' for files, 'upload folder' for directories
@@ -281,6 +310,7 @@ export class Shell {
                 if(res.success) {
                     const pid = await this.os.spawn(res.data, path);
                     this.print(`[Process ${pid}] Started: ${path}`, 'system');
+                    if (this.onSpawn) this.onSpawn(pid, path);
                 }
                 else this.print("File not found.", 'error');
             },
@@ -318,6 +348,7 @@ export class Shell {
         }
         const pid = await this.os.spawnPython(code, "/inline.py");
         this.print(`[Process ${pid}] Started: /inline.py`, 'system');
+        if (this.onSpawn) this.onSpawn(pid, "/inline.py");
         return;
     }
 
@@ -328,6 +359,7 @@ export class Shell {
     if (res.success) {
         const pid = await this.os.spawnPython(res.data, path);
         this.print(`[Process ${pid}] Started: ${path}`, 'system');
+        if (this.onSpawn) this.onSpawn(pid, path);
     } else {
         this.print("File not found.", 'error');
     }
@@ -740,11 +772,33 @@ const stylesCss = `body {
             },
 
             'term': (args) => {
-                const pid = parseInt(args[0]);
-                if (!pid) return this.print("Usage: term <pid>", 'error');
-                if (!this.os.procs.has(pid)) return this.print(`PID ${pid} not found.`, 'error');
+                // Check for --runtime flag
+                const useRuntime = args.includes('--runtime');
+                const pidArg = args.find(a => !a.startsWith('--') && !isNaN(parseInt(a)));
+                
+                // No args => open interactive shell terminal window
+                if (!pidArg) {
+                    new TerminalApp(this.os).open(null);
+                    return;
+                }
+                
+                // term <pid> => attach to an existing process TTY
+                const pid = parseInt(pidArg);
+                if (!pid) return this.print("Usage: term [--runtime] [pid]", 'error');
+                
+                // Check if it's a runtime process
+                if (useRuntime || this.os.runtime.getProcess(pid)) {
+                    new TerminalApp(this.os).open(pid, true);
+                    return;
+                }
+                
+                // Check if it's a browser process
+                if (!this.os.procs.has(pid)) {
+                    return this.print(`PID ${pid} not found.`, 'error');
+                }
                 new TerminalApp(this.os).open(pid);
             },
+            'terminal': (args) => this.commands['term'](args),
 
             'net': (args) => {
                 const sub = (args[0] || 'status').toLowerCase();
@@ -775,11 +829,333 @@ const stylesCss = `body {
                     return;
                 }
                 this.print("Usage: net [status|mode|proxy]", 'error');
+            },
+
+            // --- EXTERNAL RUNTIME COMMANDS ---
+            'runtime': async (args) => {
+                const sub = (args[0] || 'status').toLowerCase();
+                const runtime = this.os.runtime;
+                
+                if (sub === 'status') {
+                    const connected = runtime.connected;
+                    this.print(`[Runtime] Connected: ${connected}`, connected ? 'success' : 'warning');
+                    this.print(`[Runtime] URL: ${runtime.url}`, 'system');
+                    
+                    if (connected) {
+                        try {
+                            const status = await runtime.status();
+                            this.print(`[Runtime] Sandbox: ${status.config?.sandboxMode || 'unknown'}`, 'system');
+                            this.print(`[Runtime] OpenClaw: ${status.config?.allowOpenClaw ? 'enabled' : 'disabled'}`, 'system');
+                            this.print(`[Runtime] Stats: ${status.stats?.totalSpawned || 0} spawned, ${status.stats?.active || 0} active`, 'system');
+                        } catch (e) {
+                            this.print(`[Runtime] Error fetching status: ${e.message}`, 'error');
+                        }
+                    }
+                    return;
+                }
+                
+                if (sub === 'connect') {
+                    const url = args[1] || 'ws://localhost:18790';
+                    try {
+                        await runtime.connect(url);
+                    } catch (e) {
+                        this.print(`[Runtime] Connection failed: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'disconnect') {
+                    runtime.disconnect();
+                    this.print('[Runtime] Disconnected', 'system');
+                    return;
+                }
+                
+                if (sub === 'list' || sub === 'ps') {
+                    try {
+                        const processes = await runtime.list();
+                        if (processes.length === 0) {
+                            this.print('[Runtime] No active processes', 'system');
+                            return;
+                        }
+                        this.print("PID  | TYPE       | COMMAND                    | STATUS", 'system');
+                        this.print("-----|------------|----------------------------|--------", 'system');
+                        for (const proc of processes) {
+                            const name = (proc.command || '-').slice(0, 26).padEnd(26);
+                            this.print(`${proc.pid.toString().padEnd(4)} | ${proc.type.padEnd(10)} | ${name} | ${proc.status || 'running'}`);
+                        }
+                    } catch (e) {
+                        this.print(`[Runtime] Error: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'spawn') {
+                    if (!runtime.connected) {
+                        this.print('[Runtime] Not connected. Run: runtime connect', 'error');
+                        return;
+                    }
+                    const type = args[1];
+                    const command = args[2];
+                    if (!type || !command) {
+                        this.print("Usage: runtime spawn <type> <command> [args...]", 'error');
+                        this.print("Types: node, workerd, shell, python", 'system');
+                        return;
+                    }
+                    const spawnArgs = args.slice(3);
+                    try {
+                        const pid = await runtime.spawn(type, command, spawnArgs, { cwd: this.cwd });
+                        this.print(`[Runtime Process ${pid}] Started: ${command}`, 'success');
+                        if (this.onSpawn) this.onSpawn(pid, command, true); // true = isRuntime
+                    } catch (e) {
+                        this.print(`[Runtime] Spawn failed: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'kill') {
+                    if (!runtime.connected) {
+                        this.print('[Runtime] Not connected', 'error');
+                        return;
+                    }
+                    const pid = parseInt(args[1]);
+                    if (!pid) {
+                        this.print("Usage: runtime kill <pid>", 'error');
+                        return;
+                    }
+                    try {
+                        await runtime.kill(pid);
+                        this.print(`[Runtime] Process ${pid} killed`, 'success');
+                    } catch (e) {
+                        this.print(`[Runtime] Kill failed: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'attach') {
+                    if (!runtime.connected) {
+                        this.print('[Runtime] Not connected', 'error');
+                        return;
+                    }
+                    const pid = parseInt(args[1]);
+                    if (!pid) {
+                        this.print("Usage: runtime attach <pid>", 'error');
+                        return;
+                    }
+                    
+                    const proc = runtime.getProcess(pid);
+                    if (!proc) {
+                        this.print(`[Runtime] Process ${pid} not found in local registry`, 'error');
+                        return;
+                    }
+                    
+                    // Attach via TTY system
+                    this.os.attachTty(pid, (payload) => {
+                        this.print(`[${pid}] ${payload.data}`, payload.stream === 'stderr' ? 'error' : '');
+                    });
+                    
+                    // Also attach to runtime for output
+                    runtime.attach(pid, (data, type) => {
+                        this.print(`[${pid}] ${data}`, type === 'stderr' ? 'error' : '');
+                    }, (code) => {
+                        this.print(`[Runtime] Process ${pid} exited with code ${code}`, 'system');
+                        this.os.detachTty();
+                    });
+                    
+                    this.print(`[Runtime] Attached to PID ${pid}. Type 'detach' to exit.`, 'success');
+                    return;
+                }
+                
+                this.print("Usage: runtime [status|connect|disconnect|list|spawn|kill|attach]", 'error');
+            },
+            
+            'workerd': async (args) => {
+                const runtime = this.os.runtime;
+                if (!runtime.connected) {
+                    this.print('[Workerd] Runtime not connected. Run: runtime connect', 'error');
+                    return;
+                }
+                
+                const configPath = args[0];
+                if (!configPath) {
+                    this.print("Usage: workerd <config.capnp>", 'error');
+                    return;
+                }
+                
+                const resolvedPath = this.resolvePath(configPath);
+                try {
+                    const pid = await runtime.spawn('workerd', resolvedPath, [], { cwd: this.cwd });
+                    this.print(`[Workerd Process ${pid}] Started with config: ${resolvedPath}`, 'success');
+                    if (this.onSpawn) this.onSpawn(pid, `workerd:${configPath}`, true);
+                } catch (e) {
+                    this.print(`[Workerd] Failed: ${e.message}`, 'error');
+                }
+            },
+            
+            'openclaw': async (args) => {
+                const runtime = this.os.runtime;
+                const sub = (args[0] || 'status').toLowerCase();
+                
+                if (sub === 'status') {
+                    if (!runtime.connected) {
+                        this.print('[OpenClaw] Runtime not connected', 'warning');
+                        return;
+                    }
+                    try {
+                        const status = await runtime.status();
+                        const enabled = status.config?.allowOpenClaw;
+                        this.print(`[OpenClaw] Runtime support: ${enabled ? 'enabled' : 'disabled'}`, enabled ? 'success' : 'warning');
+                    } catch (e) {
+                        this.print(`[OpenClaw] Error: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'start' || sub === 'run') {
+                    if (!runtime.connected) {
+                        this.print('[OpenClaw] Runtime not connected. Run: runtime connect', 'error');
+                        return;
+                    }
+                    
+                    try {
+                        const pid = await runtime.spawn('openclaw', 'gateway', [], {
+                            cwd: this.cwd,
+                            env: { OPENCLAW_WORKSPACE: this.cwd }
+                        });
+                        this.print(`[OpenClaw] Gateway started (PID: ${pid})`, 'success');
+                        this.print('[OpenClaw] Use "openclaw attach" or "term" to interact', 'system');
+                        if (this.onSpawn) this.onSpawn(pid, 'openclaw:gateway', true);
+                    } catch (e) {
+                        this.print(`[OpenClaw] Failed to start: ${e.message}`, 'error');
+                        this.print('[OpenClaw] Ensure OpenClaw is installed in the runtime', 'system');
+                    }
+                    return;
+                }
+                
+                if (sub === 'attach') {
+                    // Find openclaw process
+                    const procs = runtime.getProcesses();
+                    const openclawProc = procs.find(p => p.type === 'openclaw');
+                    if (!openclawProc) {
+                        this.print('[OpenClaw] No running gateway found. Run: openclaw start', 'error');
+                        return;
+                    }
+                    
+                    new TerminalApp(this.os).open(openclawProc.pid, true); // true = isRuntime
+                    return;
+                }
+                
+                if (sub === 'config') {
+                    // Open configuration UI
+                    this.print('[OpenClaw] Configuration UI not yet implemented', 'system');
+                    this.print('[OpenClaw] Edit ~/.openclaw/config.json manually', 'system');
+                    return;
+                }
+                
+                this.print("Usage: openclaw [status|start|attach|config]", 'error');
+            },
+            
+            'rshell': async (args) => {
+                // Spawn an interactive shell in the runtime
+                const runtime = this.os.runtime;
+                if (!runtime.connected) {
+                    this.print('[Runtime] Not connected. Run: runtime connect', 'error');
+                    return;
+                }
+                
+                try {
+                    const pid = await runtime.spawn('shell', '/bin/bash', [], { cwd: this.cwd });
+                    this.print(`[Runtime Shell ${pid}] Started. Use "term ${pid}" to attach.`, 'success');
+                    if (this.onSpawn) this.onSpawn(pid, 'rshell', true);
+                } catch (e) {
+                    this.print(`[Runtime] Failed: ${e.message}`, 'error');
+                }
+            },
+            
+            'ping': async (args) => {
+                if (!this.os.runtime.connected) {
+                    this.print('[Ping] Runtime not connected', 'error');
+                    return;
+                }
+                
+                const start = Date.now();
+                try {
+                    await this.os.runtime.sendRequest('ping');
+                    const elapsed = Date.now() - start;
+                    this.print(`[Ping] Pong! ${elapsed}ms`, 'success');
+                } catch (e) {
+                    this.print(`[Ping] Failed: ${e.message}`, 'error');
+                }
+            },
+            
+            'fsync': async (args) => {
+                const { getFileSync } = await import('../runtime/FileSync.js');
+                const fileSync = getFileSync(this.os.runtime);
+                
+                if (!this.os.runtime.connected) {
+                    this.print('[FileSync] Runtime not connected', 'error');
+                    return;
+                }
+                
+                const sub = (args[0] || 'status').toLowerCase();
+                
+                if (sub === 'status') {
+                    const status = fileSync.getStatus();
+                    this.print('[FileSync] Status:', 'system');
+                    this.print(`  Connected: ${status.runtimeConnected}`, status.runtimeConnected ? 'success' : 'error');
+                    this.print(`  Sync in progress: ${status.inProgress}`, status.inProgress ? 'warning' : '');
+                    this.print(`  Last sync: ${status.lastSync ? new Date(status.lastSync).toLocaleString() : 'never'}`, 'system');
+                    return;
+                }
+                
+                if (sub === 'push') {
+                    this.print('[FileSync] Pushing files to runtime...', 'system');
+                    try {
+                        const result = await fileSync.pushToRuntime({
+                            path: this.cwd,
+                            onProgress: (current, total, file) => {
+                                this.print(`  [${current}/${total}] ${file}`, 'system');
+                            }
+                        });
+                        this.print(`[FileSync] Pushed ${result.synced}/${result.total} files`, 'success');
+                        if (result.failed > 0) {
+                            this.print(`[FileSync] ${result.failed} failed`, 'error');
+                        }
+                    } catch (e) {
+                        this.print(`[FileSync] Push failed: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                if (sub === 'pull') {
+                    this.print('[FileSync] Pulling files from runtime...', 'system');
+                    try {
+                        const result = await fileSync.pullFromRuntime({
+                            onProgress: (current, total, file) => {
+                                this.print(`  [${current}/${total}] ${file}`, 'system');
+                            }
+                        });
+                        this.print(`[FileSync] Pulled ${result.synced}/${result.total} files`, 'success');
+                        if (result.failed > 0) {
+                            this.print(`[FileSync] ${result.failed} failed`, 'error');
+                        }
+                    } catch (e) {
+                        this.print(`[FileSync] Pull failed: ${e.message}`, 'error');
+                    }
+                    return;
+                }
+                
+                this.print("Usage: fsync [status|push|pull]", 'error');
             }
         };
 
-        this.attachListeners();
-        this.attachDragAndDrop();
+        // Register S3 commands (after this.commands is defined)
+        registerS3Commands(this);
+
+        // If running headless (TerminalApp), don't bind HUD DOM listeners.
+        if (this.input && this.output) {
+            this.attachListeners();
+            this.attachDragAndDrop();
+        }
         this.updatePrompt();
     }
 
@@ -934,7 +1310,9 @@ if (matches.length === 1) {
         
         document.addEventListener('click', (e) => {
             const tag = e.target.tagName;
-            if (tag !== 'TEXTAREA' && tag !== 'INPUT' && tag !== 'BUTTON') {
+            // Don't steal focus if clicking inside a window (TerminalApp, etc.)
+            const inWindow = e.target.closest('.window');
+            if (tag !== 'TEXTAREA' && tag !== 'INPUT' && tag !== 'BUTTON' && !inWindow) {
                 this.input.focus();
             }
         });
@@ -946,7 +1324,11 @@ if (matches.length === 1) {
         const [cmd, ...args] = raw.split(' ');
         if (this.commands[cmd]) {
             try {
-                await this.commands[cmd](args);
+                await this.commands[cmd](args, {
+                    println: (msg, type) => this.print(msg, type),
+                    print: (msg, type) => this.write(msg),
+                    cwd: this.cwd
+                });
             } catch (err) {
                 this.print(`Error: ${err.message}`, 'error');
             }
@@ -956,11 +1338,34 @@ if (matches.length === 1) {
     }
 
     print(msg, type = '') {
+        // TerminalApp-injected print
+        if (this._printFn) {
+            this._printFn(msg, type);
+            return;
+        }
+        // HUD default print
         const line = document.createElement('div');
         line.className = `log-line ${type}`;
         line.textContent = msg;
         this.output.appendChild(line);
         this.output.scrollTop = this.output.scrollHeight;
+    }
+
+    write(raw) {
+        if (this._writeFn) return this._writeFn(raw);
+        // HUD fallback: write as a line
+        this.print(raw);
+    }
+
+    clearScreen() {
+        if (this._clearFn) return this._clearFn();
+        // In a terminal, ANSI clear screen + home:
+        // If HUD, just wipe output if present.
+        if (this.output) {
+            this.output.innerHTML = '';
+        } else {
+            this.write('\x1b[2J\x1b[H');
+        }
     }
 
     async openFileInIDE(path, ideInstance, options = {}) {
@@ -1173,4 +1578,91 @@ if (matches.length === 1) {
         }
     });
 }
+
+    // =========================================================================
+    // Command Registration and Utilities
+    // =========================================================================
+    
+    /**
+     * Register a command dynamically
+     * @param {string} name - Command name
+     * @param {Function} handler - Command handler function
+     */
+    registerCommand(name, handler) {
+        this.commands[name] = handler.bind(this);
+    }
+    
+    /**
+     * Execute a command programmatically
+     * @param {string} cmd - Command name
+     * @param {Array} args - Command arguments
+     * @returns {Promise<number>} Exit code
+     */
+    async exec(cmd, args = []) {
+        if (this.commands[cmd]) {
+            try {
+                return await this.commands[cmd](args, {
+                    println: (msg, type) => this.print(msg, type),
+                    print: (msg, type) => this.write(msg),
+                    cwd: this.cwd
+                });
+            } catch (err) {
+                this.print(`Error: ${err.message}`, 'error');
+                return 1;
+            }
+        } else {
+            this.print(`Command not found: ${cmd}`, 'error');
+            return 127;
+        }
+    }
+    
+    /**
+     * Parse command line arguments
+     * Supports: --flag, --key=value, -f, -k value, positional args
+     * @param {Array} argv - Argument array
+     * @returns {Object} Parsed args { _: [...], key: value, flag: true }
+     */
+    parseArgs(argv) {
+        const args = { _: [] };
+        
+        for (let i = 0; i < argv.length; i++) {
+            const arg = argv[i];
+            
+            // Long flag: --flag or --key=value
+            if (arg.startsWith('--')) {
+                const eq = arg.indexOf('=');
+                if (eq > 0) {
+                    // --key=value
+                    const key = arg.slice(2, eq);
+                    const value = arg.slice(eq + 1);
+                    args[key] = value;
+                } else {
+                    // --flag
+                    const key = arg.slice(2);
+                    // Check if next arg is a value (not a flag)
+                    if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                        args[key] = argv[++i];
+                    } else {
+                        args[key] = true;
+                    }
+                }
+            }
+            // Short flag: -f or -f value
+            else if (arg.startsWith('-') && arg.length > 1) {
+                const key = arg.slice(1);
+                // Check if next arg is a value (not a flag)
+                if (i + 1 < argv.length && !argv[i + 1].startsWith('-')) {
+                    args[key] = argv[++i];
+                } else {
+                    args[key] = true;
+                }
+            }
+            // Positional argument
+            else {
+                args._.push(arg);
+            }
+        }
+        
+        return args;
+    }
 }

@@ -22,6 +22,373 @@ const NET = {
     lastError: null
 };
 
+// --- EXTERNAL RUNTIME MANAGER ---
+function createRuntimeManager() {
+    const state = {
+        ws: null,
+        connected: false,
+        url: 'ws://localhost:18790',
+        connecting: false,
+        reconnectTimer: null,
+        processes: new Map(), // runtime processes: pid -> {id, type, startTime, name, ...}
+        requestId: 1,
+        pendingRequests: new Map(),
+        messageHandlers: new Map(),
+    };
+
+    // WebSocket message handlers for different message types
+    state.messageHandlers.set('stdout', (msg) => {
+        const proc = state.processes.get(msg.pid);
+        if (proc?.onOutput) proc.onOutput(msg.data, 'stdout');
+    });
+
+    state.messageHandlers.set('stderr', (msg) => {
+        const proc = state.processes.get(msg.pid);
+        if (proc?.onOutput) proc.onOutput(msg.data, 'stderr');
+    });
+
+    state.messageHandlers.set('exit', (msg) => {
+        const proc = state.processes.get(msg.pid);
+        if (proc?.onExit) proc.onExit(msg.code, msg.signal);
+        state.processes.delete(msg.pid);
+    });
+
+    state.messageHandlers.set('spawned', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('attached', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('killed', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('processList', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg.processes);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('status', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    // S3 response handlers
+    state.messageHandlers.set('s3Status', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3UploadUrl', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3DownloadUrl', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3BatchUploadUrls', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3BatchDownloadUrls', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3List', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3Delete', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('s3Metadata', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.resolve(msg);
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    state.messageHandlers.set('error', (msg) => {
+        const pending = state.pendingRequests.get(msg.id);
+        if (pending) {
+            pending.reject(new Error(msg.error));
+            state.pendingRequests.delete(msg.id);
+        }
+    });
+
+    function setupWebSocket(ws) {
+        ws.onopen = () => {
+            state.connected = true;
+            state.connecting = false;
+            OS.shell?.print('[Runtime] Connected to external runtime', 'success');
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                const handler = state.messageHandlers.get(msg.type);
+                if (handler) {
+                    handler(msg);
+                } else if (msg.type === 'connected') {
+                    OS.shell?.print(`[Runtime] Protocol v${msg.protocolVersion}`, 'system');
+                }
+            } catch (e) {
+                console.error('[Runtime] Message parse error:', e);
+            }
+        };
+
+        ws.onerror = (e) => {
+            state.connecting = false;
+            OS.shell?.print('[Runtime] Connection error', 'error');
+        };
+
+        ws.onclose = () => {
+            state.connected = false;
+            state.connecting = false;
+            state.ws = null;
+            OS.shell?.print('[Runtime] Disconnected', 'warning');
+            
+            // Clear runtime processes on disconnect
+            state.processes.clear();
+            
+            // Auto-reconnect after 5 seconds
+            state.reconnectTimer = setTimeout(() => {
+                if (!state.connected && !state.connecting) {
+                    manager.connect(state.url).catch(() => {});
+                }
+            }, 5000);
+        };
+    }
+
+    async function sendRequest(type, payload = {}, timeoutMs = 30000) {
+        if (!state.connected || !state.ws) {
+            throw new Error('Runtime not connected');
+        }
+
+        const id = `req-${state.requestId++}`;
+        
+        return new Promise((resolve, reject) => {
+            state.pendingRequests.set(id, { resolve, reject });
+            
+            // Timeout
+            setTimeout(() => {
+                if (state.pendingRequests.has(id)) {
+                    state.pendingRequests.delete(id);
+                    reject(new Error(`Request timeout after ${timeoutMs}ms`));
+                }
+            }, timeoutMs);
+
+            state.ws.send(JSON.stringify({ type, id, ...payload }));
+        });
+    }
+
+    const manager = {
+        get connected() { return state.connected; },
+        get url() { return state.url; },
+
+        connect: async (url = state.url) => {
+            if (state.connected) {
+                OS.shell?.print('[Runtime] Already connected', 'warning');
+                return;
+            }
+            if (state.connecting) {
+                OS.shell?.print('[Runtime] Connection in progress...', 'system');
+                return;
+            }
+
+            state.url = url;
+            state.connecting = true;
+            
+            // Clear any pending reconnect timer
+            if (state.reconnectTimer) {
+                clearTimeout(state.reconnectTimer);
+                state.reconnectTimer = null;
+            }
+
+            return new Promise((resolve, reject) => {
+                try {
+                    state.ws = new WebSocket(url);
+                    setupWebSocket(state.ws);
+                    
+                    // Wait for connection
+                    const checkInterval = setInterval(() => {
+                        if (state.connected) {
+                            clearInterval(checkInterval);
+                            resolve();
+                        }
+                    }, 100);
+                    
+                    // Timeout after 5 seconds
+                    setTimeout(() => {
+                        clearInterval(checkInterval);
+                        if (!state.connected) {
+                            state.connecting = false;
+                            reject(new Error('Connection timeout'));
+                        }
+                    }, 5000);
+                } catch (e) {
+                    state.connecting = false;
+                    reject(e);
+                }
+            });
+        },
+
+        disconnect: () => {
+            if (state.reconnectTimer) {
+                clearTimeout(state.reconnectTimer);
+                state.reconnectTimer = null;
+            }
+            if (state.ws) {
+                state.ws.close();
+                state.ws = null;
+            }
+            state.connected = false;
+            state.processes.clear();
+        },
+
+        spawn: async (processType, command, args = [], options = {}) => {
+            const response = await sendRequest('spawn', {
+                processType,
+                command,
+                args,
+                options,
+            });
+
+            // Track the runtime process
+            state.processes.set(response.pid, {
+                pid: response.pid,
+                type: processType,
+                command,
+                startTime: Date.now(),
+                name: command,
+                onOutput: null,
+                onExit: null,
+            });
+
+            return response.pid;
+        },
+
+        attach: (pid, onOutput, onExit) => {
+            const proc = state.processes.get(pid);
+            if (proc) {
+                proc.onOutput = onOutput;
+                proc.onExit = onExit;
+            }
+            
+            return sendRequest('attach', { pid });
+        },
+
+        detach: (pid) => {
+            const proc = state.processes.get(pid);
+            if (proc) {
+                proc.onOutput = null;
+                proc.onExit = null;
+            }
+            
+            if (state.connected) {
+                state.ws.send(JSON.stringify({ type: 'detach', pid }));
+            }
+        },
+
+        write: (pid, data) => {
+            if (state.connected) {
+                state.ws.send(JSON.stringify({ type: 'write', pid, data }));
+            }
+        },
+
+        resize: (pid, cols, rows) => {
+            if (state.connected) {
+                state.ws.send(JSON.stringify({ type: 'resize', pid, cols, rows }));
+            }
+        },
+
+        kill: async (pid, signal = 'SIGTERM') => {
+            await sendRequest('kill', { pid, signal });
+            state.processes.delete(pid);
+        },
+
+        list: async () => {
+            return sendRequest('list');
+        },
+
+        status: async () => {
+            return sendRequest('status');
+        },
+
+        getProcesses: () => {
+            return Array.from(state.processes.values());
+        },
+
+        getProcess: (pid) => {
+            return state.processes.get(pid);
+        },
+
+        // File sync operations
+        syncToRuntime: async (files) => {
+            return sendRequest('fsync', { operation: 'push', files });
+        },
+
+        syncFromRuntime: async () => {
+            return sendRequest('fsync', { operation: 'pull' });
+        },
+
+        // Expose sendRequest for advanced use
+        sendRequest: sendRequest,
+    };
+
+    return manager;
+}
+
 const OS = {
     wm: new WindowManager('desktop'),
     shell: null,
@@ -64,6 +431,18 @@ const OS = {
         const proc = OS.procs.get(pid);
         if (proc && OS.ttySink && proc.ttyBuffer && proc.ttyBuffer.length) {
             proc.ttyBuffer.forEach(payload => OS.ttySink(payload));
+        }
+    },
+
+    // Set a per-process TTY sink (for TerminalApp)
+    setProcTtySink: (pid, sink = null) => {
+        const proc = OS.procs.get(pid);
+        if (proc) {
+            proc.ttySink = typeof sink === 'function' ? sink : null;
+            // Flush existing buffer
+            if (proc.ttySink && proc.ttyBuffer && proc.ttyBuffer.length) {
+                proc.ttyBuffer.forEach(payload => proc.ttySink(payload));
+            }
         }
     },
 
@@ -153,7 +532,10 @@ spawnPython: async (code, path = "/process.py") => {
             OS.procs.delete(pid);
             OS.shell.print(`[KERNEL] Process ${pid} terminated.`, 'system');
         }
-    }
+    },
+
+    // --- EXTERNAL RUNTIME (Workerd) INTEGRATION ---
+    runtime: createRuntimeManager()
 };
 
 let esbuildPromise = null;
@@ -796,7 +1178,11 @@ function setupWorkerListeners(worker, pid) {
                         proc.ttyBufferSize -= String(removed.data || '').length;
                     }
                 }
-                if (OS.ttyAttachedPid === pid && OS.ttySink) {
+                // Per-process sink takes priority (TerminalApp), then global sink, then HUD
+                const proc = OS.procs.get(pid);
+                if (proc && proc.ttySink) {
+                    proc.ttySink(payload);
+                } else if (OS.ttyAttachedPid === pid && OS.ttySink) {
                     OS.ttySink(payload);
                 } else {
                     OS.shell.print(`[${pid}] ${payload.data}`, payload.stream === 'stderr' ? 'error' : '');
@@ -877,3 +1263,6 @@ function setupWorkerListeners(worker, pid) {
         }
     };
 }
+
+// Expose OS to window for debugging
+window.OS = OS;

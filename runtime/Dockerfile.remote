@@ -1,0 +1,152 @@
+# MHNOS Workerd Runtime - Remote VPS Edition with S3 Support
+# Multi-stage build for isolated Node.js/Workerd execution with MinIO S3 integration
+
+# =============================================================================
+# Stage 1: Base image with Node.js 22
+# =============================================================================
+FROM node:22-slim AS base
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    curl \
+    ca-certificates \
+    git \
+    python3 \
+    python3-pip \
+    unzip \
+    sudo \
+    # For node-pty and native modules
+    build-essential \
+    python3-dev \
+    # For networking tools
+    netcat-openbsd \
+    iputils-ping \
+    # For TTY support
+    socat \
+    # For workerd dependencies
+    libc6 \
+    libstdc++6 \
+    # For s3fs-fuse (optional - to mount S3 as filesystem)
+    s3fs \
+    fuse \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/*
+
+# =============================================================================
+# Stage 2: Final runtime image with S3 support
+# =============================================================================
+FROM base AS runtime
+
+# Build argument for optional OpenClaw installation
+ARG INSTALL_OPENCLAW=true
+
+# Install workerd from npm
+RUN npm install -g workerd@latest && \
+    ln -sf /usr/local/lib/node_modules/workerd/bin/workerd /usr/local/bin/workerd 2>/dev/null || \
+    ln -sf /usr/local/lib/node_modules/.bin/workerd /usr/local/bin/workerd 2>/dev/null || \
+    echo "Workerd binary location will be detected at runtime"
+
+# Install OpenClaw if requested
+RUN if [ "$INSTALL_OPENCLAW" = "true" ]; then \
+    echo "Installing OpenClaw..." && \
+    npm install -g openclaw@latest && \
+    echo "OpenClaw installed successfully"; \
+else \
+    echo "OpenClaw installation skipped"; \
+fi
+
+# Create non-root user for security (use higher UID/GID to avoid conflicts)
+RUN groupadd -r mhnos -g 9999 && \
+    useradd -r -u 9999 -g mhnos -m -s /bin/bash mhnos && \
+    mkdir -p /workspace /opt/mhnos-runtime && \
+    chown -R mhnos:mhnos /workspace /opt/mhnos-runtime && \
+    echo "mhnos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/mhnos && \
+    chmod 0440 /etc/sudoers.d/mhnos
+
+# Setup workspace
+WORKDIR /workspace
+VOLUME ["/workspace"]
+
+# Copy runtime bridge code
+COPY --chown=mhnos:mhnos package.json /opt/mhnos-runtime/package.json
+COPY --chown=mhnos:mhnos server.js /opt/mhnos-runtime/server.js
+COPY --chown=mhnos:mhnos server-remote.js /opt/mhnos-runtime/server-remote.js
+
+# Create templates directory
+RUN mkdir -p /opt/mhnos-runtime/templates
+
+# Copy template files individually
+COPY --chown=mhnos:mhnos templates/default.capnp /opt/mhnos-runtime/templates/default.capnp
+COPY --chown=mhnos:mhnos templates/nodejs-compat.capnp /opt/mhnos-runtime/templates/nodejs-compat.capnp
+
+# Copy mount scripts
+COPY --chown=mhnos:mhnos mount-s3.sh entrypoint.sh /opt/mhnos-runtime/
+RUN chmod +x /opt/mhnos-runtime/mount-s3.sh /opt/mhnos-runtime/entrypoint.sh
+
+# Create lib and state directories
+RUN mkdir -p /opt/mhnos-runtime/lib /opt/mhnos-runtime/state && \
+    chown -R mhnos:mhnos /opt/mhnos-runtime/lib /opt/mhnos-runtime/state
+
+# Install runtime dependencies including AWS SDK for S3
+WORKDIR /opt/mhnos-runtime
+
+# Install base dependencies first
+RUN npm install --production && \
+    chown -R mhnos:mhnos node_modules
+
+# Install additional S3 dependencies
+RUN npm install @aws-sdk/client-s3 @aws-sdk/s3-request-presigner && \
+    chown -R mhnos:mhnos node_modules
+
+# Create a wrapper script to find workerd at runtime
+RUN cat > /usr/local/bin/workerd-wrapper << 'EOF'
+#!/bin/bash
+# Find workerd binary
+WORKERD_PATH=""
+
+if [ -x "/usr/local/bin/workerd" ]; then
+    WORKERD_PATH="/usr/local/bin/workerd"
+elif [ -x "/usr/local/lib/node_modules/workerd/bin/workerd" ]; then
+    WORKERD_PATH="/usr/local/lib/node_modules/workerd/bin/workerd"
+elif [ -x "/usr/local/lib/node_modules/.bin/workerd" ]; then
+    WORKERD_PATH="/usr/local/lib/node_modules/.bin/workerd"
+fi
+
+if [ -z "$WORKERD_PATH" ]; then
+    echo "Error: workerd binary not found" >&2
+    exit 1
+fi
+
+exec "$WORKERD_PATH" "$@"
+EOF
+RUN chmod +x /usr/local/bin/workerd-wrapper && \
+    ln -sf /usr/local/bin/workerd-wrapper /usr/local/bin/workerd
+
+# Allow passwordless sudo for mhnos user (needed for some operations)
+RUN echo "mhnos ALL=(ALL) NOPASSWD:ALL" > /etc/sudoers.d/mhnos && \
+    chmod 0440 /etc/sudoers.d/mhnos
+
+# Environment configuration
+ENV MHNOS_RUNTIME_PORT=18790
+ENV MHNOS_WORKSPACE=/workspace
+ENV MHNOS_SANDBOX=relaxed
+ENV MHNOS_ALLOW_OPENCLAW=${INSTALL_OPENCLAW}
+ENV NODE_ENV=production
+ENV PATH="/usr/local/bin:/usr/bin:/bin:/opt/mhnos-runtime/node_modules/.bin"
+
+# S3 environment defaults (override at runtime)
+ENV S3_ENDPOINT=http://minio:9000
+ENV S3_BUCKET=workspace
+ENV S3_REGION=us-east-1
+ENV S3_FORCE_PATH_STYLE=true
+ENV S3_PRESIGN_EXPIRY=3600
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD nc -z localhost ${MHNOS_RUNTIME_PORT} || exit 1
+
+# Expose WebSocket port for MHNOS communication
+EXPOSE ${MHNOS_RUNTIME_PORT}
+
+# Start runtime bridge with S3 mount
+ENTRYPOINT ["/opt/mhnos-runtime/entrypoint.sh"]

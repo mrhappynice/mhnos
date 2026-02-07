@@ -13,6 +13,7 @@ MHNOS is a **mini dev OS in your browser**:
 - app scaffolding + bundling
 - Packedit for build/serve/export
 - optional Rust WS proxy for real networking + TCP
+- **External Runtime** - Run Node.js 22+, Workerd, Python, and OpenClaw AI in isolated Docker containers
 
 It’s designed to be friendly and fun: you can learn by doing, without installing a giant toolchain first.
 
@@ -260,6 +261,51 @@ Usage:
    - `net proxy ws://localhost:5772`
 
 3. Confirm with `net status`
+
+---
+
+## External Runtime (Workerd/OpenClaw)
+
+MHNOS can connect to an **external runtime** running in a Docker container. This provides:
+
+- **Full Node.js 22+** with native modules
+- **Workerd** (Cloudflare Workers runtime)
+- **Python 3**
+- **OpenClaw/Moltbot** AI agent framework
+- Real process isolation
+
+### Quick Start
+
+```bash
+# Start the runtime
+cd runtime
+docker-compose up -d
+
+# Connect from MHNOS
+runtime connect
+```
+
+### File Sharing
+
+The runtime uses a **shared folder** (`~/mhnos-workspace` by default):
+
+1. Upload files to Web OS
+2. Export to shared folder: `backup export /myproject`
+3. Runtime sees files at `/workspace`
+4. Runtime writes files → appears in shared folder
+5. Import back to Web OS: `upload`
+
+### Key Commands
+
+| Command | Description |
+|---------|-------------|
+| `runtime connect` | Connect to runtime container |
+| `rshell` | Spawn bash shell in runtime |
+| `runtime spawn node app.js` | Run Node.js script |
+| `openclaw start` | Start OpenClaw AI agent |
+| `term --runtime <pid>` | Attach terminal to process |
+
+See `demos/README.md` for detailed documentation.
 
 ---
 
