@@ -308,5 +308,10 @@ The runtime uses a **shared folder** (`~/mhnos-workspace` by default):
 See `demos/README.md` for detailed documentation.
 
 ---
+### License:  
 
----
+Personal use.  
+Use it.  
+Fork it.  
+Build something better on top of it.
+
